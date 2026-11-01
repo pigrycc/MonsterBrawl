@@ -23,8 +23,8 @@ Legend: ✅ Done · 🟡 Partial · ❌ Missing · 🚫 Needs native CI runner (
 | electron-builder win/mac/linux config | ✅ |
 | **Linux `.zip` artifact (built & verified here)** | ✅ (99 MB, launchable, app.asar verified) |
 | **CI workflow: win/mac/linux matrix** | ✅ (`.github/workflows/build-desktop.yml`) |
-| Windows `.zip` + `.exe` artifact | 🚫→CI (produced by the workflow on `windows-latest`) |
-| macOS universal `.app` `.zip` artifact | 🚫→CI (produced by the workflow on `macos-latest`, unsigned) |
+| **Windows `.zip` + `.exe` artifact** | ✅ CI (106 MB, green on `windows-latest`) |
+| **macOS universal `.app` `.zip` artifact** | ✅ CI (165 MB arm64+x86_64, green on `macos-latest`, unsigned) |
 
 ## §2 Networking & Multiplayer
 | Item | Status |
