@@ -17,7 +17,7 @@
     "dist:linux": "vite build && electron-builder --linux zip",
     "dist:win": "vite build && electron-builder --win zip",
     "dist:mac": "vite build && electron-builder --mac zip --universal",
-    "test": "node --test \"test/*.test.js\""
+    "test": "node --test"
   },
   "dependencies": {
     "ws": "^8.18.0"
