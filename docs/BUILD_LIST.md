@@ -25,6 +25,7 @@ Legend: ✅ Done · 🟡 Partial · ❌ Missing · 🚫 Needs native CI runner (
 | **CI workflow: win/mac/linux matrix** | ✅ (`.github/workflows/build-desktop.yml`) |
 | **Windows `.zip` + `.exe` artifact** | ✅ CI (106 MB, green on `windows-latest`) |
 | **macOS universal `.app` `.zip` artifact** | ✅ CI (165 MB arm64+x86_64, green on `macos-latest`, unsigned) |
+| **Public direct-download links (GitHub Release)** | ✅ tag-triggered release job → [v0.1.3 release](https://github.com/pigrycc/MonsterBrawl/releases/tag/v0.1.3) |
 
 ## §2 Networking & Multiplayer
 | Item | Status |
