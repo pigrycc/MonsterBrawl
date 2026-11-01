@@ -1,0 +1,78 @@
+name: Build Desktop Packages
+
+# Produces the native distribution artifacts from GDD §1:
+#   - Windows  .zip  (contains MonsterColiseumBrawl.exe + runtime)
+#   - macOS    .zip  (universal MonsterColiseumBrawl.app, arm64 + x86_64)
+#   - Linux    .zip  (proof/pipeline + Linux play)
+#
+# Each OS builds its own package on a native runner (electron-builder cannot
+# cross-compile a mac .app from Linux, nor sign it). Artifacts are uploaded so
+# you can download, extract, and double-click to reach the lobby.
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+    branches: [main]
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Headless data/rules tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm test
+
+  build:
+    name: Package (${{ matrix.os }})
+    needs: test
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: dist:linux
+            artifact: linux-zip
+          - os: windows-latest
+            target: dist:win
+            artifact: windows-zip
+          - os: macos-latest
+            target: dist:mac
+            artifact: macos-universal-zip
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build + package
+        run: npm run ${{ matrix.target }}
+        env:
+          # Unsigned builds for the prototype. macOS users right-click → Open to
+          # authorize the first launch (GDD-mentioned "authorize on Mac" step).
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: MonsterColiseumBrawl-${{ matrix.artifact }}
+          path: release/*.zip
+          if-no-files-found: error
+          retention-days: 14

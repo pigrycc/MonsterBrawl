@@ -19,11 +19,12 @@ Legend: ✅ Done · 🟡 Partial · ❌ Missing · 🚫 Needs native CI runner (
 ## §1 Platforms & Packaging
 | Item | Status |
 |---|---|
-| Electron + Vite + Three.js skeleton | ✅ |
+| Electron + Vite + Three.js skeleton | ✅ (main + preload + Vite + WebGL scene) |
 | electron-builder win/mac/linux config | ✅ |
-| Windows `.zip` + `.exe` artifact | 🚫 CI (Windows runner / wine) |
-| macOS universal `.app` `.zip` artifact | 🚫 CI (macOS runner + signing) |
-| Linux `.zip` artifact (pipeline proof) | ❌ (next: after client exists) |
+| **Linux `.zip` artifact (built & verified here)** | ✅ (99 MB, launchable, app.asar verified) |
+| **CI workflow: win/mac/linux matrix** | ✅ (`.github/workflows/build-desktop.yml`) |
+| Windows `.zip` + `.exe` artifact | 🚫→CI (produced by the workflow on `windows-latest`) |
+| macOS universal `.app` `.zip` artifact | 🚫→CI (produced by the workflow on `macos-latest`, unsigned) |
 
 ## §2 Networking & Multiplayer
 | Item | Status |
