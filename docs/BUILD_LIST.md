@@ -41,12 +41,15 @@ Legend: ✅ Done · 🟡 Partial · ❌ Missing · 🚫 Needs native CI runner (
 ## §3 Lobby & Hub
 | Item | Status |
 |---|---|
-| Low-poly trainers in Ready Room | ❌ |
-| Mirror customization | ❌ |
-| 5 pedestals + `[E]` bind | ❌ |
-| Host console mode dropdown | ❌ |
-| Bot Fill toggle | ❌ |
-| Host-only START MATCH | ❌ |
+| Low-poly trainer in Ready Room (procedural model) | ✅ |
+| Mirror customization (skin `[E]` / tunic `[R]`) | ✅ |
+| 5 pedestals + `[E]` bind | ✅ |
+| Host console mode dropdown (Tournament/FFA/Team) | ✅ |
+| Bot Fill toggle | ✅ |
+| Host-only START MATCH (disabled until monster chosen) | ✅ |
+| FPP walk-around controller (pointer-lock + WASD) | ✅ |
+| Verified: headless WebGL render, no errors, UI live | ✅ |
+| Remaining polish: brighter lighting, framing, other players' trainers | 🟡 |
 
 ## §4 Preparation Phase
 | Item | Status |
