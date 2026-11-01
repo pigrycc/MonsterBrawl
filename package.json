@@ -56,7 +56,8 @@
       "category": "public.app-category.games",
       "artifactName": "MonsterColiseumBrawl-${version}-mac-${arch}.${ext}",
       "hardenedRuntime": false,
-      "gatekeeperAssess": false
+      "gatekeeperAssess": false,
+      "differentialPackage": false
     },
     "linux": {
       "target": [{ "target": "zip", "arch": ["x64"] }],

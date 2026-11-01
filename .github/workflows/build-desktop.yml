@@ -70,6 +70,18 @@ jobs:
           # tries to auto-publish a release, racing the dedicated release job.
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
 
+      # Guard: electron-builder 25.x can exit non-zero on a vestigial post-zip
+      # step (blockmap) on recent macOS runners even though the .zip is fully
+      # written. differentialPackage:false removes that step; this verifies the
+      # artifact actually exists so a real failure still fails the job.
+      - name: Verify artifact exists
+        shell: bash
+        run: |
+          count=$(ls release/*.zip 2>/dev/null | wc -l)
+          echo "Found $count .zip artifact(s):"
+          ls -lh release/*.zip
+          test "$count" -ge 1
+
       - name: Upload CI artifact (every run)
         uses: actions/upload-artifact@v4
         with:
