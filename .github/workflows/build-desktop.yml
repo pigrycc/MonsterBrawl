@@ -66,8 +66,9 @@ jobs:
         env:
           # Unsigned builds for the prototype. macOS users right-click → Open to
           # authorize the first launch (GDD-mentioned "authorize on Mac" step).
+          # NOTE: deliberately NO GH_TOKEN here — otherwise electron-builder also
+          # tries to auto-publish a release, racing the dedicated release job.
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Upload CI artifact (every run)
         uses: actions/upload-artifact@v4
@@ -77,11 +78,26 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
-      # On a v* tag push, publish the .zip to a GitHub Release so it gets a
-      # permanent, public, direct-download URL:
-      #   https://github.com/pigrycc/MonsterBrawl/releases/download/<tag>/<file>.zip
-      - name: Publish to GitHub Release (tags only)
-        if: startsWith(github.ref, 'refs/tags/v')
+  # Single release job runs AFTER all three builds succeed, collects their
+  # artifacts, and publishes the Release exactly once (no parallel-create race).
+  release:
+    name: Publish GitHub Release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Collect .zip files
+        run: |
+          mkdir -p release
+          find artifacts -name '*.zip' -exec cp {} release/ \;
+          ls -lh release/
+
+      - name: Publish to GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           files: release/*.zip
