@@ -18,7 +18,7 @@ on:
   workflow_dispatch: {}
 
 permissions:
-  contents: read
+  contents: write   # needed so tagged builds can publish Release assets (direct download links)
 
 jobs:
   test:
@@ -69,10 +69,33 @@ jobs:
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Upload artifact
+      - name: Upload CI artifact (every run)
         uses: actions/upload-artifact@v4
         with:
           name: MonsterColiseumBrawl-${{ matrix.artifact }}
           path: release/*.zip
           if-no-files-found: error
           retention-days: 14
+
+      # On a v* tag push, publish the .zip to a GitHub Release so it gets a
+      # permanent, public, direct-download URL:
+      #   https://github.com/pigrycc/MonsterBrawl/releases/download/<tag>/<file>.zip
+      - name: Publish to GitHub Release (tags only)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release/*.zip
+          fail_on_unmatched_files: true
+          draft: false
+          prerelease: true
+          generate_release_notes: true
+          name: Monster Coliseum Brawl ${{ github.ref_name }}
+          body: |
+            Prototype desktop builds for **${{ github.ref_name }}**.
+
+            ### Direct downloads
+            - **Windows:** `MonsterColiseumBrawl-*-win-x64.zip` — extract, double-click `MonsterColiseumBrawl.exe`.
+            - **macOS (universal):** `MonsterColiseumBrawl-*-mac-universal.zip` — extract, then right-click the `.app` → **Open** to authorize (unsigned prototype build).
+            - **Linux:** `MonsterColiseumBrawl-*-linux-x64.zip`.
+
+            > ⚠️ Unsigned prototype. Builds are verified to compile/package in CI; launch-testing on real hardware is recommended.
