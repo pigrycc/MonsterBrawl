@@ -170,7 +170,9 @@ export class ArenaPhase {
   }
 
   _botThink(dt) {
-    // Minimal opponent: stay offensive, cast ready damage skills on a cadence.
+    // IDLE profile (GDD §8): passive target dummy — no stance changes, no casts.
+    if (DebugConfig.get('botBehaviorMode') === 'IDLE') return;
+    // HUMANLIKE (minimal): stay offensive, cast ready damage skills on a cadence.
     this._botTimer -= dt;
     if (this.foe.stance !== STANCES.OFFENSIVE && this.foe.staminaFraction > 0.3) this.foe.commandStance(STANCES.OFFENSIVE);
     if (this.foe.staminaFraction < 0.3) this.foe.commandStance(STANCES.NEUTRAL);

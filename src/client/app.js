@@ -14,6 +14,8 @@ import { LobbyScene } from './lobby/lobbyScene.js';
 import { LocalState } from './state/localState.js';
 import { PrepPhase } from './prep/prepPhase.js';
 import { ArenaPhase } from './arena/arenaPhase.js';
+import { DebugConsole } from './ui/debugConsole.js';
+import { DebugConfig } from '../shared/debugConfig.js';
 import { freeSkills } from '../shared/skills.js';
 
 export class GameApp {
@@ -37,6 +39,17 @@ export class GameApp {
       }
     });
 
+    // Global in-game debug console (GDD §9), toggled with [~] (Backquote).
+    // Lives above all phases so you can tune variables anywhere.
+    this.debugConsole = new DebugConsole();
+    this.input.onPress('Backquote', (e) => {
+      // Don't hijack the key while typing into a form field.
+      const tag = document.activeElement?.tagName;
+      if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') return;
+      e.preventDefault();
+      this.debugConsole.toggle();
+    });
+
     this._loop = this._loop.bind(this);
     requestAnimationFrame(this._loop);
     this.enterLobby();
@@ -48,6 +61,7 @@ export class GameApp {
       startMatch: () => this.startMatch(),
       phase: () => this.phaseName,
       state: () => LocalState.get(),
+      toggleConsole: () => this.debugConsole.toggle(),
     };
   }
 
@@ -65,12 +79,15 @@ export class GameApp {
 
   startMatch() {
     const st = LocalState.get();
-    if (!st.selectedMonsterId) return;
+    // Debug override: forceLocalMonsterType (GDD §9) wins over the pedestal pick.
+    const forced = DebugConfig.get('forceLocalMonsterType');
+    const localMonster = (forced && forced !== 'NONE') ? forced.toLowerCase() : st.selectedMonsterId;
+    if (!localMonster) return;
     // Build the fighter list. Local prototype: human + one bot opponent so the
     // Tournament bout has two combatants (full bot drafting arrives in §8).
-    const opponentMonster = pickOpponentMonster(st.selectedMonsterId);
+    const opponentMonster = pickOpponentMonster(localMonster);
     const fighters = [
-      { playerId: st.localPlayerId, monsterId: st.selectedMonsterId, seed: (Date.now() & 0xffff) },
+      { playerId: st.localPlayerId, monsterId: localMonster, seed: (Date.now() & 0xffff) },
       { playerId: 'bot-1', monsterId: opponentMonster, seed: ((Date.now() >> 3) & 0xffff) },
     ];
     this.enterPrep(fighters);

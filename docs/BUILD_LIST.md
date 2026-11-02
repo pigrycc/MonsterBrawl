@@ -102,6 +102,16 @@ Legend: ✅ Done · 🟡 Partial · ❌ Missing · 🚫 Needs native CI runner (
 | Idle dummy | ❌ |
 | Humanlike (draft/stamina/skills/drops/shove) | ❌ |
 
-## §9 Debug Console `[~]` | ✅ (registry) / ❌ (overlay UI)
+## §9 Debug Console `[~]`
+| Item | Status |
+|---|---|
+| Registry: all 12 variables + 2 enums | ✅ |
+| In-game overlay UI (toggle `[~]`) | ✅ |
+| Typed controls (checkbox/slider+number/dropdown) | ✅ |
+| Hot-reload: edits take effect live | ✅ |
+| Reset-to-defaults + external-change sync | ✅ |
+| `forceLocalMonsterType` override wired (verified) | ✅ |
+| `botBehaviorMode` IDLE/HUMANLIKE wired into arena bot | ✅ |
+| Verified: headless render — opens, 12 rows, flip persists, override works | ✅ |
 
 ## §10 50-Skill DB | ✅ (loaded, corrected, tested)
