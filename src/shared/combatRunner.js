@@ -14,6 +14,7 @@ import { CombatMatch, MonsterCombatant, STANCES, MATCH_STATE } from './combat.js
 import { getSkillById } from './skills.js';
 import { botChooseStance, botChooseSkill } from './bot.js';
 import { resolveCast } from './slapstick.js';
+import { resolveSkill } from './skillEffects.js';
 import { TrainerState } from './trainerState.js';
 import { DebugConfig } from './debugConfig.js';
 import { THROWABLES, THROWABLE_INFO, applyThrowable } from './throwables.js';
@@ -45,6 +46,7 @@ export class CombatRunner {
     this._botTimers = { a: 0, b: 0 };
     this._projectiles = [];  // authoritative spectator throwables in flight
     this._projId = 1;
+    this._hazards = [];      // persistent field hazards (spikes/ice/clouds/...)
   }
 
   combatantFor(playerId) {
@@ -105,21 +107,64 @@ export class CombatRunner {
   _resolveCast(side, id) {
     const self = side === 'a' ? this.a : this.b;
     const foe = side === 'a' ? this.b : this.a;
+    const foeSide = side === 'a' ? 'b' : 'a';
     const skill = getSkillById(id);
     self.clearMoveOrder(); // casting a skill interrupts a click-to-move order
     self.spendStamina(skill.stamina);
     self.startCooldown(id);
-    const { hit, reaction } = resolveCast(id, this._dist());
-    if (skill.damage > 0) {
-      if (hit) {
-        const dealt = this.match.dealDamage(foe, skill.damage, { isBasic: false });
-        this._events.push({ type: 'hit', target: side === 'a' ? 'b' : 'a', dmg: dealt, skill: id });
-      } else {
-        this._events.push({ type: 'miss', caster: side, reaction, skill: id });
-      }
-    } else {
-      this._events.push({ type: 'cast', caster: side, skill: id });
+
+    // Fleshed-out skill effects: route monster HP loss through the match so
+    // Sudden Death still resolves; apply status/buffs/hazards via the engine.
+    const res = resolveSkill({
+      skillId: id, caster: self, foe, distance: this._dist(),
+      dealDamage: (target, amount, opts) => this.match.dealDamage(target, amount, opts),
+    });
+
+    // Register any spawned field hazards, anchored to a world position.
+    for (const hz of res.hazards) {
+      const anchorPos = hz.anchor === 'foe' ? this.pos[foeSide] : this.pos[side];
+      this._hazards.push({ ...hz, x: anchorPos.x, z: anchorPos.z });
     }
+    // Translate engine events to replicated combat events.
+    for (const e of res.events) {
+      if (e.kind === 'miss') this._events.push({ type: 'miss', caster: side, skill: id });
+      else if (e.kind === 'knockback') this._knock(foeSide, e.distance);
+      else if (e.kind === 'knockSelf') this._knock(side, e.distance);
+      else if (e.kind === 'teleport') this._applyTeleport(side, e.mode);
+      else this._events.push({ type: 'skillfx', caster: side, target: foeSide, skill: id, ...e });
+    }
+  }
+
+  /** Reposition a monster for a TELEPORT skill. */
+  _applyTeleport(side, mode) {
+    const p = this.pos[side], other = side === 'a' ? 'b' : 'a', q = this.pos[other];
+    if (mode === 'blink' || mode === 'dig') { p.x = q.x; p.z = q.z + (side === 'a' ? -1.5 : 1.5); }
+    else if (mode === 'bounce') { p.x = q.x + (Math.random() - 0.5) * 3; p.z = q.z + (Math.random() - 0.5) * 3; }
+    this._clamp(side);
+  }
+
+  /** Resolve persistent field hazards each tick (entry damage / DoT / pull / slow). */
+  _stepHazards(dt) {
+    if (!this._hazards?.length) return;
+    for (const hz of this._hazards) {
+      hz.timer -= dt;
+      for (const side of ['a', 'b']) {
+        const mon = side === 'a' ? this.a : this.b;
+        if (mon.isHovering) continue; // Fly ignores ground hazards
+        const p = this.pos[side];
+        const inside = Math.hypot(p.x - hz.x, p.z - hz.z) <= hz.radius;
+        if (!inside) { hz._inside?.delete?.(side); continue; }
+        hz._inside ??= new Set();
+        const firstEntry = !hz._inside.has(side);
+        hz._inside.add(side);
+        if (firstEntry && hz.entryDamage) this.match.dealDamage(mon, hz.entryDamage, {});
+        if (firstEntry && hz.dot) mon.addDot(hz.dot.dps, hz.dot.sec, 'Earth');
+        if (hz.dps) this.match.dealDamage(mon, hz.dps * dt, {});
+        if (hz.status) mon.applyEffect(hz.status.name, hz.status.sec);
+        if (hz.pull) { const dx = hz.x - p.x, dz = hz.z - p.z, d = Math.hypot(dx, dz) || 1; p.x += (dx / d) * 1.5 * dt; p.z += (dz / d) * 1.5 * dt; }
+      }
+    }
+    this._hazards = this._hazards.filter((h) => h.timer > 0);
   }
 
   _dist() { return Math.hypot(this.pos.a.x - this.pos.b.x, this.pos.a.z - this.pos.b.z); }
@@ -235,6 +280,7 @@ export class CombatRunner {
     this._steer('b', dt);
     this._aggroInterception();   // #5
     this._stepProjectiles(dt);   // authoritative spectator throwables
+    this._stepHazards(dt);       // persistent field hazards (spikes/ice/clouds)
     this.tick++;
   }
 
@@ -300,6 +346,7 @@ export class CombatRunner {
       b: pack(this.b, 'b'),
       // in-flight spectator throwables so clients can render the arc
       projectiles: this._projectiles.map((p) => ({ id: p.id, kind: p.kind, t: +p.t.toFixed(3), tx: p.tx, tz: p.tz })),
+      hazards: this._hazards.map((h) => ({ kind: h.kind, x: +h.x.toFixed(2), z: +h.z.toFixed(2), radius: h.radius, timer: +h.timer.toFixed(1) })),
       events: this._events,
     };
   }

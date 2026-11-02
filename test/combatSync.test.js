@@ -70,9 +70,11 @@ test('player intents mutate authoritative state', () => {
   // force the two close, then cast a melee skill and expect a hit event
   r.pos.a = { x: 0, z: 0 }; r.pos.b = { x: 1, z: 0 };
   r.a.cooldowns.clear(); r.a.stamina = 100;
+  const foeHpBefore = r.b.hp;
   r.cmdCast('host', 0); // Tackle (id 1), in range
   const ev = r.snapshot().events;
-  assert.ok(ev.some((e) => e.type === 'hit'), 'in-range cast → hit event');
+  // fleshed-out skills emit a 'skillfx' damage event; the foe should lose HP
+  assert.ok(ev.some((e) => e.type === 'skillfx' && e.kind === 'damage') || r.b.hp < foeHpBefore, 'in-range cast dealt damage');
 });
 
 test('runner ends and reports a result', () => {

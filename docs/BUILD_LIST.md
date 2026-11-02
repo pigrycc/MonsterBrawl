@@ -217,3 +217,21 @@ Legend: ✅ Done · 🟡 Partial · ❌ Missing · 🚫 Needs native CI runner (
 ### Notes
 - Authoritative spectator throws lead a MOVING monster imperfectly (lobs land where aimed) — intentional; precise aiming is a later refinement.
 - Slapstick timing/feel is partly subjective — tuned for readability; adjust to taste.
+
+---
+
+## Skill-effect system (depth pass — flesh out the 50 skills)
+| Item | Status |
+|---|---|
+| Effect taxonomy mapping all 50 skills → 14 archetypes | ✅ (docs/SKILL_EFFECTS.md) |
+| Authoritative effect engine (`src/shared/skillEffects.js`) | ✅ shared, deterministic, 14 archetypes |
+| Combatant status/effect system (DoT, buffs, shields, statuses, Bide) | ✅ sleep/confuse/taunt/disable/panic/slow/haste/endure/hover/immune/reflect/vulnerable |
+| Field hazards (spikes/ice/cloud/trap/whirlpool) persist + tick | ✅ entry damage / DoT / pull / slow; Fly ignores ground hazards |
+| Wired into authoritative runner (networked) + single-player arena | ✅ HP routes through CombatMatch (Sudden Death preserved) |
+| Hazard + status visuals (ground discs, projectiles, toasts) | ✅ archetype-level (not bespoke per-skill art) |
+| 15 new effect-engine tests (115 total) | ✅ one representative per archetype |
+
+### Notes / honest scope
+- Mechanics are **distinct and tested**; visuals are **archetype-shared** (all projectiles look alike, etc.) — bespoke per-skill VFX is a later polish pass.
+- A few statuses (Encore repeat, Thief item use, trainer-screen blinds) are modeled in state + events but their full feedback loops are light; flagged for follow-up.
+- Numbers (DoT dps, hazard durations, status seconds) are first-pass — needs a balance tuning pass with real play.

@@ -60,6 +60,15 @@ export class MonsterCombatant {
     this.moveOrder = null;      // {x,z} trainer click-to-move target (overrides stance)
     this.attackTarget = 'monster'; // #3 'monster' | 'trainer' — who OFFENSIVE chases
 
+    // --- Skill-effect system (fleshed-out skills) ---------------------------
+    this.effects = new Map();   // name → { timer, ...params } active timed effects
+    this.dots = [];             // [{dps, timer, element}] damage-over-time stacks
+    this.shield = null;         // { kind:'immune'|'reflect'|'block', timer }
+    this.bide = null;           // { timer, stored } CHARGE_COUNTER accumulator
+    this.lastSkillId = null;    // for Encore/Disable
+    this.disabledSkillId = null;// Disable: this slot is locked
+    this.carriedItem = null;    // for Thief
+
     this.skillIds = skillIds.slice(0, 4);
     this.cooldowns = new Map(); // skillId -> seconds remaining
     this.alive = true;
@@ -74,6 +83,37 @@ export class MonsterCombatant {
   /** Spectator Rotten Tomato on a monster → confused wander for `sec`. */
   applyConfuse(sec) { this.confuseTimer = Math.max(this.confuseTimer, sec); }
 
+  // --- Skill-effect API -----------------------------------------------------
+  /** Apply/refresh a named timed status effect (sleep/taunt/slow/vulnerable/...). */
+  applyEffect(name, sec, params = {}) { this.effects.set(name, { timer: sec, ...params }); }
+  hasEffect(name) { return (this.effects.get(name)?.timer ?? 0) > 0; }
+  effectParams(name) { return this.effects.get(name); }
+
+  /** Add a damage-over-time stack. */
+  addDot(dps, sec, element = 'Neutral') { this.dots.push({ dps, timer: sec, element }); }
+
+  /** Put up a shield: 'immune' (block all), 'reflect' (bounce projectiles), 'block'. */
+  applyShield(kind, sec) { this.shield = { kind, timer: sec }; }
+  get isImmune() { return this.shield?.kind === 'immune' && this.shield.timer > 0; }
+  get isReflecting() { return this.shield?.kind === 'reflect' && this.shield.timer > 0; }
+
+  /** Sleep / panic / taunt / disable / encore convenience flags. */
+  get isAsleep() { return this.hasEffect('sleep'); }
+  get isPanicked() { return this.hasEffect('panic'); }
+  get isTaunted() { return this.hasEffect('taunt'); }
+  /** Endure: HP cannot drop below 1 while active. */
+  get isEnduring() { return this.hasEffect('endure'); }
+  /** Hover (Fly): immune to ground hazards while active. */
+  get isHovering() { return this.hasEffect('hover'); }
+
+  /** Effective speed multiplier from buffs/debuffs (agility/slow). */
+  get speedMultiplier() {
+    let m = 1;
+    if (this.hasEffect('haste')) m *= 2;      // Agility
+    if (this.hasEffect('slow')) m *= 0.6;     // Lick / Icy_Wind
+    return m;
+  }
+
   /** #3 Set who the Offensive stance pursues: the enemy 'monster' or 'trainer'. */
   setAttackTarget(which) { if (which === 'monster' || which === 'trainer') this.attackTarget = which; }
 
@@ -84,10 +124,11 @@ export class MonsterCombatant {
   get hasMoveOrder() { return this.moveOrder != null; }
   get staminaFraction() { return this.maxStamina > 0 ? this.stamina / this.maxStamina : 0; }
 
-  /** Effective move speed — zero while stunned OR getting up (#1). */
+  /** Effective move speed — zero while stunned/getting-up/asleep (#1 + effects). */
   get effectiveSpeed() {
-    if (this.isIncapacitated) return 0;
-    return this.baseSpeed * (this.staminaFraction < LOW_STAMINA_FRACTION ? LOW_STAMINA_SLOW : 1);
+    if (this.isIncapacitated || this.isAsleep) return 0;
+    const stam = this.staminaFraction < LOW_STAMINA_FRACTION ? LOW_STAMINA_SLOW : 1;
+    return this.baseSpeed * stam * this.speedMultiplier;
   }
 
   /** Trainer issues a stance change — applied after the 2.0s delay (GDD §5B). */
@@ -122,6 +163,8 @@ export class MonsterCombatant {
 
   canCast(skillId) {
     if (this.isIncapacitated || !this.alive) return false;
+    if (this.isAsleep) return false;                       // Yawn
+    if (this.disabledSkillId === skillId) return false;    // Disable
     if (!this.skillIds.includes(skillId)) return false;
     if ((this.cooldowns.get(skillId) ?? 0) > 0) return false;
     const skill = getSkillById(skillId);
@@ -135,14 +178,21 @@ export class MonsterCombatant {
    * @param {boolean} [opts.isBasic]  basic attack (one can be fully negated while defending)
    * @returns {number} damage actually dealt
    */
-  takeDamage(amount, { isBasic = false } = {}) {
+  takeDamage(amount, { isBasic = false, isProjectile = false } = {}) {
     if (!this.alive || amount <= 0) return 0;
+    // Withdraw: fully immune. (Reflect handling for projectiles is done by the
+    // engine, which checks isReflecting before calling takeDamage.)
+    if (this.isImmune) return 0;
     let dmg = amount;
     if (this.stance === STANCES.DEFENSIVE) {
       if (isBasic && this.guardBasicCharges > 0) { this.guardBasicCharges -= 1; return 0; }
       if (!isBasic) dmg = Math.round(dmg * DEFENSIVE_SKILL_MULT);
     }
+    // Bide: absorb everything that lands during the charge window.
+    if (this.bide && this.bide.timer > 0) { this.bide.stored += dmg; }
     this.hp = Math.max(0, this.hp - dmg);
+    // Endure: HP can't drop below 1 while active.
+    if (this.isEnduring && this.hp < 1 && amount > 0) this.hp = 1;
     if (this.hp === 0) this.alive = false;
     return dmg;
   }
@@ -173,6 +223,27 @@ export class MonsterCombatant {
       const rate = this.stance === STANCES.NEUTRAL ? REGEN_REST_PER_SEC : REGEN_COMBAT_PER_SEC;
       this.stamina = Math.min(this.maxStamina, this.stamina + rate * dt);
     }
+
+    // --- Skill-effect timers --------------------------------------------------
+    // Named timed status effects (sleep/taunt/slow/haste/endure/hover/...).
+    for (const [name, e] of this.effects) {
+      e.timer -= dt;
+      if (e.timer <= 0) this.effects.delete(name);
+    }
+    if (this.disabledSkillId != null && !this.hasEffect('disable')) this.disabledSkillId = null;
+    // Damage-over-time stacks (poison/burn).
+    if (this.dots.length) {
+      for (const d of this.dots) {
+        const tick = d.dps * dt;
+        this.hp = Math.max(0, this.hp - tick);
+        if (this.isEnduring && this.hp < 1) this.hp = 1;
+        d.timer -= dt;
+      }
+      this.dots = this.dots.filter((d) => d.timer > 0);
+      if (this.hp === 0) this.alive = false;
+    }
+    // Shield timer.
+    if (this.shield) { this.shield.timer -= dt; if (this.shield.timer <= 0) this.shield = null; }
   }
 
   startCooldown(skillId) {

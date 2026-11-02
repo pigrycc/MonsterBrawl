@@ -21,10 +21,15 @@ import { getSkillById } from '../../shared/skills.js';
 import { DebugConfig } from '../../shared/debugConfig.js';
 import { botChooseStance, botChooseSkill } from '../../shared/bot.js';
 import { THROWABLES, THROWABLE_INFO, applyThrowable, randomThrowable } from '../../shared/throwables.js';
-import { resolveCast } from '../../shared/slapstick.js';
+import { resolveCast, reactionForId } from '../../shared/slapstick.js';
+import { resolveSkill } from '../../shared/skillEffects.js';
 import { TrainerState } from '../../shared/trainerState.js';
 import { SFX } from '../audio/sfx.js';
 import { FootstepTracker } from '../audio/footsteps.js';
+
+// Local helpers for fleshed-out single-player skill effects.
+const skillMissReaction = (id) => reactionForId(id);
+const dirAway = (fromPos, toPos) => ({ x: toPos.x - fromPos.x, z: toPos.z - fromPos.z });
 
 const SHOVE_RANGE = 3.5;
 const SHOVE_DISTANCE = 4;
@@ -236,22 +241,30 @@ export class ArenaPhase {
     this.local.spendStamina(skill.stamina);
     this.local.startCooldown(skillId);
 
-    // #3 Range-based hit/miss. A miss triggers the skill's slapstick reaction
-    // on the caster's own monster (GDD §10 slapstick column).
+    // Fleshed-out skill effects (single-player). Monster HP loss routes through
+    // the match (Sudden Death); status/buffs/hazards applied by the engine.
     const dist = Math.hypot(this.scene3d.bView.pos.x - this.scene3d.aView.pos.x, this.scene3d.bView.pos.z - this.scene3d.aView.pos.z);
-    const { hit, reaction } = resolveCast(skillId, dist);
+    const res = resolveSkill({
+      skillId, caster: this.local, foe: this.foe, distance: dist,
+      dealDamage: (target, amount, opts) => this.match.dealDamage(target, amount, opts),
+    });
 
-    if (skill.damage > 0) {
-      if (hit) {
-        const dealt = this.match.dealDamage(this.foe, skill.damage, { isBasic: false });
-        this.scene3d.flashHit('b');
-        if (dealt > 0) { SFX.impact(Math.min(1, skill.damage / 50)); this.overlay.showToast(`${skill.name} → ${dealt} dmg`, 800); }
-      } else {
-        this.scene3d.playReaction('a', reaction);
-        this.overlay.showToast(`${skill.name} MISSED! (${skill.slapstick})`, 1600);
-      }
-    } else {
-      this.overlay.showToast(`${skill.name} (utility)`, 800);
+    for (const hz of res.hazards) {
+      const anchor = hz.anchor === 'foe' ? this.scene3d.bView.pos : this.scene3d.aView.pos;
+      (this._localHazards ??= []).push({ ...hz, x: anchor.x, z: anchor.z });
+      this.scene3d.spawnHazardVisual?.(hz.kind, anchor.x, anchor.z, hz.radius);
+    }
+    for (const e of res.events) {
+      if (e.kind === 'miss') { this.scene3d.playReaction('a', skillMissReaction(skillId)); this.overlay.showToast(`${skill.name} MISSED! (${skill.slapstick})`, 1600); }
+      else if (e.kind === 'damage') { this.scene3d.flashHit('b'); SFX.impact(Math.min(1, (e.dmg || skill.damage) / 50)); }
+      else if (e.kind === 'reflect') { this.scene3d.flashHit('a'); SFX.hurt(); this.overlay.showToast('Reflected!', 900); }
+      else if (e.kind === 'knockback') this.scene3d.knockback('b', dirAway(this.scene3d.aView.pos, this.scene3d.bView.pos), e.distance);
+      else if (e.kind === 'knockSelf') this.scene3d.knockback('a', dirAway(this.scene3d.bView.pos, this.scene3d.aView.pos), e.distance);
+      else if (e.kind === 'selfBuff') this.overlay.showToast(`${skill.name}: ${e.effect} ↑`, 900);
+      else if (e.kind === 'shield') this.overlay.showToast(`${skill.name}: ${e.shieldKind} up`, 900);
+      else if (e.kind === 'heal') this.overlay.showToast(`+${e.amount} HP`, 900);
+      else if (e.kind === 'status') this.overlay.showToast(`${skill.name}: ${e.name}!`, 900);
+      else if (e.kind === 'hazard') this.overlay.showToast(`${skill.name} — hazard placed`, 900);
     }
   }
 

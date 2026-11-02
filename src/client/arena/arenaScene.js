@@ -250,6 +250,32 @@ export class ArenaScene {
   /** World position of a monster view, for landing-proximity checks. */
   monsterPos(which) { return (which === 'a' ? this.aView : this.bView).pos; }
 
+  /** Spawn a visible ground disc for a field hazard (spikes/ice/cloud/...). */
+  spawnHazardVisual(kind, x, z, radius, sec = 6) {
+    const colors = { spikes: 0x8a8f99, toxic_spikes: 0x7d3fbf, ice: 0x9fd7ff, poison_cloud: 0x66aa44, smoke: 0x2a2a2a, fire_trap: 0xff6b3d, whirlpool: 0x2f7fd1, slip: 0x6b5a2a };
+    const color = colors[kind] ?? 0x999999;
+    const mesh = new THREE.Mesh(
+      new THREE.CircleGeometry(radius, 20),
+      new THREE.MeshStandardMaterial({ color, transparent: true, opacity: 0.45, side: THREE.DoubleSide })
+    );
+    mesh.rotation.x = -Math.PI / 2; mesh.position.set(x, 0.05, z);
+    this.scene.add(mesh);
+    (this._hazardVisuals ??= []).push({ mesh, timer: sec });
+    return mesh;
+  }
+
+  _stepHazardVisuals(dt) {
+    if (!this._hazardVisuals?.length) return;
+    const alive = [];
+    for (const h of this._hazardVisuals) {
+      h.timer -= dt;
+      h.mesh.material.opacity = 0.45 * Math.min(1, h.timer);
+      h.mesh.rotation.z += dt * 0.5;
+      if (h.timer > 0) alive.push(h); else this.scene.remove(h.mesh);
+    }
+    this._hazardVisuals = alive;
+  }
+
   /** World position of the opponent trainer (for #3 trainer-targeting). */
   get oppTrainerPos() { return this.oppTrainer ? this.oppTrainer.position : null; }
 
@@ -421,7 +447,7 @@ export class ArenaScene {
     if (locked) {
       if (this.physics) this.physics.step(dt);
       this._syncFromPhysics();
-      this._animate(dt); this._animateCrowdAndTrainers(dt); this._stepDust(dt);
+      this._animate(dt); this._animateCrowdAndTrainers(dt); this._stepDust(dt); this._stepHazardVisuals(dt);
       return { events, landed };
     }
     this._stepMonster(this.aView, this.bView, dt, events, 'a');
@@ -430,6 +456,7 @@ export class ArenaScene {
     this._animate(dt);
     this._animateCrowdAndTrainers(dt);
     this._stepDust(dt); // #2 slapstick dust puffs
+    this._stepHazardVisuals(dt);
     return { events, landed };
   }
 
