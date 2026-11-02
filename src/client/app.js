@@ -18,6 +18,7 @@ import { DebugConsole } from './ui/debugConsole.js';
 import { MainMenu } from './ui/mainMenu.js';
 import { NetClient } from './net/netClient.js';
 import { installUiClickSound } from './audio/sfx.js';
+import { initRapier } from './physics/physicsWorld.js';
 import { DebugConfig } from '../shared/debugConfig.js';
 import { freeSkills } from '../shared/skills.js';
 
@@ -56,6 +57,7 @@ export class GameApp {
     this.net = null; // NetClient when in a networked session
 
     installUiClickSound(); // #7 tactile UI click SFX across all menus/HUD
+    initRapier();          // #1 start loading the physics WASM early
 
     this._loop = this._loop.bind(this);
     requestAnimationFrame(this._loop);

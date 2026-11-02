@@ -196,7 +196,8 @@ export class ArenaPhase {
     const toFoe = new THREE.Vector3(this.scene3d.bView.pos.x - this.controller.position.x, 0, this.scene3d.bView.pos.z - this.controller.position.z);
     if (toFoe.length() <= SHOVE_RANGE) {
       toFoe.normalize();
-      this.scene3d.bView.pos.addScaledVector(toFoe, SHOVE_DISTANCE);
+      this.scene3d.knockback('b', { x: toFoe.x, z: toFoe.z }, SHOVE_DISTANCE); // #1 real impulse
+      SFX.impact(0.5);
       this.overlay.showToast('Shoved!', 700);
       this._shoveCooldown = DebugConfig.get('shoveCooldownSeconds');
     } else {
@@ -265,7 +266,7 @@ export class ArenaPhase {
     const botToPlayerMon = Math.hypot(this.scene3d.aView.pos.x - this._botTrainerPos().x, this.scene3d.aView.pos.z - this._botTrainerPos().z);
     if (this._botShoveTimer === 0 && botToPlayerMon < 3.5) {
       const dir = new THREE.Vector3(this.scene3d.aView.pos.x - this.scene3d.bView.pos.x, 0, this.scene3d.aView.pos.z - this.scene3d.bView.pos.z);
-      if (dir.lengthSq() > 0) { dir.normalize(); this.scene3d.aView.pos.addScaledVector(dir, 4); }
+      if (dir.lengthSq() > 0) { dir.normalize(); this.scene3d.knockback('a', { x: dir.x, z: dir.z }, 4); } // #1 impulse
       this._botShoveTimer = DebugConfig.get('shoveCooldownSeconds');
     }
   }
@@ -411,5 +412,6 @@ export class ArenaPhase {
     this.controller.dispose();
     this.hud.dispose();
     this.overlay.dispose();
+    this.scene3d.dispose?.(); // #1 free the Rapier world
   }
 }

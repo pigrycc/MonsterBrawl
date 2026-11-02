@@ -8,6 +8,7 @@ import * as THREE from 'three';
 import { createMonster } from '../models/monster.js';
 import { STANCES } from '../../shared/combat.js';
 import { createTrainer, SKIN_TONES, TUNIC_COLORS } from '../models/trainer.js';
+import { PhysicsWorld, isRapierReady } from '../physics/physicsWorld.js';
 
 const ARENA_RADIUS = 22;   // #5: grand coliseum footprint (was 13)
 const MELEE_RANGE = 2.4;
@@ -29,8 +30,24 @@ export class ArenaScene {
     // #5 wider spawn separation to suit the grander arena
     this.aView = this._spawnMonster(a, new THREE.Vector3(-8, 0, 3));
     this.bView = this._spawnMonster(b, new THREE.Vector3(8, 0, 3));
-    this._buildTrainers();     // #5 visible local + opponent trainers
+    this._buildTrainers();     // #5 visible opponent trainer
     this.drops = []; // {mesh, kind}
+
+    // #1 Physics: if Rapier is loaded, create a physics world with solid walls
+    // and dynamic bodies for both monsters. Movement then runs on rigid bodies
+    // with real impulses + tumble ragdoll. If not ready yet, we fall back to
+    // the steering+clamp path (still correct, just no rigid-body collisions).
+    this.physics = null;
+    if (isRapierReady()) {
+      try {
+        this.physics = new PhysicsWorld({ radius: ARENA_RADIUS });
+        this.physics.addMonster('a', this.aView.pos, this.aView.combatant.maxHp / 120 + 0.5);
+        this.physics.addMonster('b', this.bView.pos, this.bView.combatant.maxHp / 120 + 0.5);
+      } catch (e) {
+        console.warn('[MCB] physics init failed, using steering fallback:', e?.message);
+        this.physics = null;
+      }
+    }
   }
 
   _buildArena() {
@@ -196,6 +213,24 @@ export class ArenaScene {
   /** World position of a monster view, for landing-proximity checks. */
   monsterPos(which) { return (which === 'a' ? this.aView : this.bView).pos; }
 
+  /**
+   * #1 Shove/knockback a monster a given distance in a direction. Uses a real
+   * physics impulse when available; otherwise moves the position directly.
+   */
+  knockback(which, dir, distance) {
+    const v = which === 'a' ? this.aView : this.bView;
+    const n = { x: dir.x, z: dir.z };
+    const len = Math.hypot(n.x, n.z) || 1; n.x /= len; n.z /= len;
+    if (this.physics) {
+      this.physics.applyImpulse(which, n.x * distance * 6, 2, n.z * distance * 6);
+    } else {
+      v.pos.x += n.x * distance; v.pos.z += n.z * distance;
+      this._clampToArena(v);
+    }
+  }
+
+  dispose() { this.physics?.dispose?.(); }
+
   /** Flash a monster red when it takes damage. */
   flashHit(which) { (which === 'a' ? this.aView : this.bView)._hitFlash = 0.25; }
 
@@ -224,9 +259,15 @@ export class ArenaScene {
   update(dt, locked) {
     const events = [];
     const landed = this._stepProjectiles(dt); // throwables fly even during lock
-    if (locked) { this._animate(dt); this._animateCrowdAndTrainers(dt); return { events, landed }; }
+    if (locked) {
+      if (this.physics) this.physics.step(dt);
+      this._syncFromPhysics();
+      this._animate(dt); this._animateCrowdAndTrainers(dt);
+      return { events, landed };
+    }
     this._stepMonster(this.aView, this.bView, dt, events, 'a');
     this._stepMonster(this.bView, this.aView, dt, events, 'b');
+    if (this.physics) { this.physics.step(dt); this._syncFromPhysics(); }
     this._animate(dt);
     this._animateCrowdAndTrainers(dt);
     return { events, landed };
@@ -278,11 +319,50 @@ export class ArenaScene {
     }
 
     self._moving = move.lengthSq() > 0;
-    if (self._moving) {
+    const key = self === this.aView ? 'a' : 'b';
+
+    if (this.physics && !self._reaction) {
+      // Physics mode: drive the rigid body toward the desired velocity. The
+      // wall colliders stop it escaping — no manual clamp needed.
+      if (self._moving) {
+        move.normalize().multiplyScalar(speed);
+        this.physics.setDesiredVelocity(key, move.x, move.z);
+      } else {
+        this.physics.setDesiredVelocity(key, 0, 0);
+      }
+    } else if (self._moving) {
       self.pos.addScaledVector(move.normalize(), speed * dt);
+      this._clampToArena(self); // fallback boundary
     }
-    this._clampToArena(self); // #6 hard boundary every frame
     self.facing = Math.atan2(toFoe.x, toFoe.z);
+  }
+
+  /**
+   * #1 Pull rigid-body transforms into the render views, and drive stun↔ragdoll
+   * transitions: a freshly-stunned monster tumbles (ragdoll); on recovery it
+   * stands back up.
+   */
+  _syncFromPhysics() {
+    if (!this.physics) return;
+    for (const [key, v] of [['a', this.aView], ['b', this.bView]]) {
+      const c = v.combatant;
+      // stun → ragdoll transition
+      if (c.isStunned && !v._ragdolling) {
+        v._ragdolling = true;
+        const foe = key === 'a' ? this.bView : this.aView;
+        const away = { x: v.pos.x - foe.pos.x, z: v.pos.z - foe.pos.z };
+        const len = Math.hypot(away.x, away.z) || 1;
+        this.physics.ragdoll(key, { x: away.x / len, z: away.z / len });
+      } else if (!c.isStunned && v._ragdolling) {
+        v._ragdolling = false;
+        this.physics.standUp(key);
+      }
+      const t = this.physics.getTransform(key);
+      if (t) {
+        v.pos.set(t.pos.x, 0, t.pos.z);
+        v._physRot = t.rot; // quaternion while ragdolling
+      }
+    }
   }
 
   /**
@@ -313,7 +393,17 @@ export class ArenaScene {
         v.mesh.rotation.set(0, v.facing, 0);
       }
 
-      this._clampToArena(v); // belt-and-suspenders boundary enforcement (#6)
+      // #1 Physics ragdoll: while tumbling, drive the mesh directly from the
+      // rigid body's full orientation (free rotation) + height.
+      if (v._ragdolling && v._physRot) {
+        const t = this.physics.getTransform(v === this.aView ? 'a' : 'b');
+        v.mesh.position.set(t.pos.x, Math.max(0.2, t.pos.y), t.pos.z);
+        v.mesh.quaternion.set(t.rot.x, t.rot.y, t.rot.z, t.rot.w);
+        const base = v.baseScale ?? 1; v.mesh.scale.set(base, base, base);
+        continue;
+      }
+
+      if (!this.physics) this._clampToArena(v); // fallback boundary (physics walls handle it otherwise)
       const yBase = c.def.silhouette === 'raptor_hover' ? 0.3 : 0;
 
       // #4 Locomotion juice: squash-and-stretch bob + side roll while moving.

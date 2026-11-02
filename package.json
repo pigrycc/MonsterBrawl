@@ -20,6 +20,7 @@
     "test": "node --test"
   },
   "dependencies": {
+    "@dimforge/rapier3d-compat": "^0.14.0",
     "ws": "^8.18.0"
   },
   "devDependencies": {
@@ -48,18 +49,39 @@
       "main": "electron/main.cjs"
     },
     "win": {
-      "target": [{ "target": "zip", "arch": ["x64"] }],
+      "target": [
+        {
+          "target": "zip",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
       "artifactName": "MonsterColiseumBrawl-${version}-win-${arch}.${ext}"
     },
     "mac": {
-      "target": [{ "target": "zip", "arch": ["universal"] }],
+      "target": [
+        {
+          "target": "zip",
+          "arch": [
+            "universal"
+          ]
+        }
+      ],
       "category": "public.app-category.games",
       "artifactName": "MonsterColiseumBrawl-${version}-mac-${arch}.${ext}",
       "hardenedRuntime": false,
       "gatekeeperAssess": false
     },
     "linux": {
-      "target": [{ "target": "zip", "arch": ["x64"] }],
+      "target": [
+        {
+          "target": "zip",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
       "category": "Game",
       "artifactName": "MonsterColiseumBrawl-${version}-linux-${arch}.${ext}"
     }
