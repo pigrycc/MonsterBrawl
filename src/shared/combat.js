@@ -68,6 +68,7 @@ export class MonsterCombatant {
     this.lastSkillId = null;    // for Encore/Disable
     this.disabledSkillId = null;// Disable: this slot is locked
     this.carriedItem = null;    // for Thief
+    this.godMode = false;       // #3 debug: ignore damage + infinite stamina (local only)
 
     this.skillIds = skillIds.slice(0, 4);
     this.cooldowns = new Map(); // skillId -> seconds remaining
@@ -154,6 +155,7 @@ export class MonsterCombatant {
   get stanceDelayRemaining() { return 0; }
 
   spendStamina(n) {
+    if (this.godMode) { this.stamina = this.maxStamina; return; } // #3 infinite stamina, no exhaustion stun
     this.stamina = Math.max(0, this.stamina - n);
     if (this.stamina === 0 && !this.isStunned) {
       this.stunTimer = STUN_DURATION;
@@ -180,6 +182,7 @@ export class MonsterCombatant {
    */
   takeDamage(amount, { isBasic = false, isProjectile = false } = {}) {
     if (!this.alive || amount <= 0) return 0;
+    if (this.godMode) { this.hp = this.maxHp; return 0; } // #3 ignore all damage
     // Withdraw: fully immune. (Reflect handling for projectiles is done by the
     // engine, which checks isReflecting before calling takeDamage.)
     if (this.isImmune) return 0;
@@ -195,6 +198,30 @@ export class MonsterCombatant {
     if (this.isEnduring && this.hp < 1 && amount > 0) this.hp = 1;
     if (this.hp === 0) this.alive = false;
     return dmg;
+  }
+
+  /**
+   * Round reset (Bo3 #1): restore HP/stamina to full, clear all transient
+   * combat state (effects/DoTs/shields/cooldowns/stun/stance), and replenish
+   * skill charges. Preserves identity (playerId/monsterId/skillIds) + godMode.
+   */
+  resetForRound() {
+    this.hp = this.maxHp;
+    this.stamina = this.maxStamina;
+    this.alive = true;
+    this.stance = STANCES.NEUTRAL;
+    this.stanceCooldown = 0;
+    this.stunTimer = 0; this.getUpTimer = 0;
+    this.confuseTimer = 0;
+    this.guardBasicCharges = 0;
+    this.moveOrder = null;
+    this.attackTarget = 'monster';
+    this.effects.clear();
+    this.dots = [];
+    this.shield = null;
+    this.bide = null;
+    this.disabledSkillId = null;
+    this.cooldowns.clear();  // replenish all skill charges [1]-[4]
   }
 
   /** Per-tick update: stance cooldown, stun, cooldowns, stamina regen. */
@@ -218,10 +245,12 @@ export class MonsterCombatant {
       const n = cd - dt;
       if (n <= 0) this.cooldowns.delete(id); else this.cooldowns.set(id, n);
     }
-    // Stamina regen (faster while resting/neutral)
+    // Stamina regen (faster while resting/neutral), scaled by the debug
+    // staminaRegenMultiplier (#2) — applies to both passive + Neutral rest.
     if (!this.isStunned) {
       const rate = this.stance === STANCES.NEUTRAL ? REGEN_REST_PER_SEC : REGEN_COMBAT_PER_SEC;
-      this.stamina = Math.min(this.maxStamina, this.stamina + rate * dt);
+      const mult = DebugConfig.multiplier('staminaRegenMultiplier');
+      this.stamina = Math.min(this.maxStamina, this.stamina + rate * mult * dt);
     }
 
     // --- Skill-effect timers --------------------------------------------------
@@ -231,12 +260,13 @@ export class MonsterCombatant {
       if (e.timer <= 0) this.effects.delete(name);
     }
     if (this.disabledSkillId != null && !this.hasEffect('disable')) this.disabledSkillId = null;
-    // Damage-over-time stacks (poison/burn).
+    // Damage-over-time stacks (poison/burn). God mode ignores DoT damage (#3).
     if (this.dots.length) {
       for (const d of this.dots) {
-        const tick = d.dps * dt;
-        this.hp = Math.max(0, this.hp - tick);
-        if (this.isEnduring && this.hp < 1) this.hp = 1;
+        if (!this.godMode) {
+          this.hp = Math.max(0, this.hp - d.dps * dt);
+          if (this.isEnduring && this.hp < 1) this.hp = 1;
+        }
         d.timer -= dt;
       }
       this.dots = this.dots.filter((d) => d.timer > 0);

@@ -24,6 +24,7 @@ import { THROWABLES, THROWABLE_INFO, applyThrowable, randomThrowable } from '../
 import { resolveCast, reactionForId } from '../../shared/slapstick.js';
 import { resolveSkill } from '../../shared/skillEffects.js';
 import { TrainerState } from '../../shared/trainerState.js';
+import { SeriesState } from '../../shared/series.js';
 import { SFX } from '../audio/sfx.js';
 import { FootstepTracker } from '../audio/footsteps.js';
 
@@ -69,9 +70,24 @@ export class ArenaPhase {
     this.match = new CombatMatch({ a: this.local, b: this.foe, countdown: 3, onEnd: (r) => this._onEnd(r) });
     this.scene3d = new ArenaScene({ a: this.local, b: this.foe });
 
+    // #1 Best-of-3 series. In networked play the host drives rounds; locally the
+    // arena orchestrates round-end → reset → re-countdown.
+    this.series = new SeriesState(localF.playerId, foeF.playerId);
+    this._roundResetting = false;
+
     // #2 Trainer HP states (a = local/left trainer, b = opponent/right trainer).
     this.trainerA = new TrainerState(localF.playerId);
     this.trainerB = new TrainerState(foeF.playerId);
+
+    // #3 God mode (debug) — applies to the LOCAL monster + trainer only. Live:
+    // reads the flag now and subscribes so flipping it in [~] takes effect
+    // immediately. (Single-player only; networked HP is host-authoritative.)
+    const applyGod = () => {
+      const on = DebugConfig.get('godModeEnabled') && !this.synced;
+      if (!this.spectator) { this.local.godMode = on; this.trainerA.godMode = on; }
+    };
+    applyGod();
+    this._godUnsub = DebugConfig.onChange((key) => { if (key === 'godModeEnabled' || key === '*') applyGod(); });
 
     this.camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 200);
     this.scene3d._camera = this.camera; // #2 overhead-bar billboarding
@@ -609,23 +625,83 @@ export class ArenaPhase {
     }
   }
 
+  /**
+   * A single ROUND concluded. Record the round win; if the series (Bo3) is
+   * decided, show the final screen + payout. Otherwise show a round banner,
+   * reset the arena, run the 3·2·1 countdown, and start the next round.
+   */
   _onEnd(result) {
+    if (this._finished || this._roundResetting) return;
+
+    // In synced mode the host owns the series; a COMBAT_END means match over.
+    if (this.synced) { this._finishMatch(result); return; }
+
+    this.series.recordRoundWin(result.winnerPlayerId);
+    const winnerName = result.winnerPlayerId === this.local.playerId ? this.local.def.name : this.foe.def.name;
+    this.hud.setSeriesScore?.(this.series.winsA, this.series.winsB);
+
+    if (this.series.isOver) {
+      // Series decided → final victory screen + match payout.
+      this._finishMatch(result);
+      return;
+    }
+
+    // Round over but series continues → banner, reset, re-countdown.
+    this._roundResetting = true;
+    this.hud.showCountdown('');
+    this.hud.showEnd(`Round ${this.series.round} — ${winnerName} wins`, `Series ${this.series.scoreString()} · next round…`);
+    setTimeout(() => this._startNextRound(), 2800);
+  }
+
+  /** Reset the arena and begin the next Bo3 round (#1). */
+  _startNextRound() {
+    this.series.nextRound();
+    this.hud.showEnd('', ''); this.hud.hideEnd?.();
+    // Reset combatants (HP/stamina/effects/cooldowns) + trainer HP.
+    this.local.resetForRound(); this.foe.resetForRound();
+    this.trainerA.hp = this.trainerA.maxHp; this.trainerA.alive = true;
+    this.trainerB.hp = this.trainerB.maxHp; this.trainerB.alive = true;
+    // Teleport monsters back to spawn; clear hazards/drops/throwables.
+    this.scene3d.resetArena?.();
+    // Clear the phase's own transient round state (local hazards, wind-up,
+    // carried item, shove/drop/spectator timers) so the new round starts clean.
+    this._localHazards = [];
+    this._windup = null;
+    this._carrying = null;
+    this._shoveCooldown = 0;
+    this._botTimer = 0;
+    this._botShoveTimer = 0;
+    this._arenaDropTimer = DebugConfig.get('arenaItemSpawnRate');
+    this._specTimer = DebugConfig.get('spectatorItemSpawnRate');
+    this._lastCamPos = null; // reset footstep tracking baseline
+    this.overlay.hidePrompt?.();
+    // Fresh match (round) with a new 3·2·1 countdown.
+    this.match = new CombatMatch({ a: this.local, b: this.foe, countdown: 3, onEnd: (r) => this._onEnd(r) });
+    this._prevCount = null;
+    this._roundResetting = false;
+    this.overlay.showToast(`Round ${this.series.round}! Series ${this.series.scoreString()}`, 1800);
+  }
+
+  /** The whole Bo3 match is decided — final screen + payout + return to lobby. */
+  _finishMatch(result) {
     if (this._finished) return;
     this._finished = true;
+    const seriesWinner = this.series.seriesWinner ?? result.winnerPlayerId;
     if (this.spectator) {
-      const winnerName = result.winnerPlayerId === this.local.playerId ? this.local.def.name : this.foe.def.name;
-      this.hud.showEnd(`${winnerName} WINS`, 'You were spectating');
+      const name = seriesWinner === this.local.playerId ? this.local.def.name : this.foe.def.name;
+      this.hud.showEnd(`${name} WINS THE MATCH`, `Series ${this.series.scoreString()} · you were spectating`);
     } else {
-      const won = result.winnerPlayerId === this.localPlayerId;
-      this.hud.showEnd(won ? 'VICTORY' : 'DEFEAT', won ? `+${result.winReward} Gold` : `+${result.loseReward} Gold`);
+      const won = seriesWinner === this.localPlayerId;
+      this.hud.showEnd(won ? 'VICTORY' : 'DEFEAT', `Series ${this.series.scoreString()} · ${won ? `+${result.winReward}` : `+${result.loseReward}`} Gold`);
     }
-    setTimeout(() => this.onComplete?.(result), 3000);
+    setTimeout(() => this.onComplete?.(result), 3500);
   }
 
   dispose() {
     window.removeEventListener('resize', this._onResize);
     this._subs?.forEach((off) => off());
     this._specSubs?.forEach((off) => off()); // #1 spectator-throw key bindings
+    this._godUnsub?.(); // #3 god-mode debug subscription
     this.controller?.dispose();
     this.hud.dispose();
     this.overlay.dispose();

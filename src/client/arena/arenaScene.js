@@ -832,6 +832,80 @@ export class ArenaScene {
     }
   }
 
+  /**
+   * #1 Best-of-3 round reset: teleport both monsters back to their spawns,
+   * reset their physics bodies + transient view/animation flags, and clear all
+   * arena clutter (crowd drops, in-flight + authoritative throwables, floor
+   * hazards, dust puffs). Combat HP/stamina/effects are reset separately by the
+   * combatants' resetForRound(); this handles only the visual/physical world.
+   */
+  resetArena() {
+    const spawnA = new THREE.Vector3(-8, 0, 3);
+    const spawnB = new THREE.Vector3(8, 0, 3);
+    const reseat = (v, spawn) => {
+      v.pos.copy(spawn);
+      v.facing = 0;
+      v._basicTimer = 0;
+      v._hitFlash = 0;
+      v._moving = false;
+      v._gait = 0;
+      // clear slapstick + ragdoll/get-up state so the new round starts upright
+      v._reaction = null; v._reactionT = 0; v._reactionDir = null;
+      v._reactionCued = false; v._recoilLanded = false;
+      v._ragdolling = false; v._gettingUp = false; v._physRot = null;
+      v._wanderDir = null; v._wanderT = 0;
+      // snap the mesh back to an upright pose at the spawn
+      const base = v.baseScale ?? 1;
+      const yBase = v.combatant.def.silhouette === 'raptor_hover' ? 0.3 : 0;
+      v.mesh.quaternion.set(0, 0, 0, 1);
+      v.mesh.rotation.set(0, 0, 0);
+      v.mesh.scale.set(base, base, base);
+      v.mesh.position.set(spawn.x, yBase, spawn.z);
+      v.mesh.traverse((o) => { if (o.isMesh && o.material.emissive) o.material.emissive.setHex(0x000000); });
+    };
+    reseat(this.aView, spawnA);
+    reseat(this.bView, spawnB);
+
+    // Reset the rigid bodies to the spawns with zero velocity/spin.
+    if (this.physics) {
+      this.physics.standUp?.('a'); this.physics.standUp?.('b');
+      this.physics.setDesiredVelocity?.('a', 0, 0);
+      this.physics.setDesiredVelocity?.('b', 0, 0);
+      this.physics.setPosition('a', spawnA.x, 1.0, spawnA.z);
+      this.physics.setPosition('b', spawnB.x, 1.0, spawnB.z);
+    }
+
+    // Clear crowd drops.
+    for (const d of this.drops.slice()) this.scene.remove(d.mesh);
+    this.drops = [];
+
+    // Clear in-flight local throwables.
+    if (this._projectiles?.length) {
+      for (const p of this._projectiles) this.scene.remove(p.mesh);
+      this._projectiles = [];
+    }
+    // Clear authoritative (networked) throwable meshes.
+    if (this._authProj) {
+      for (const [, mesh] of this._authProj) this.scene.remove(mesh);
+      this._authProj = new Map();
+    }
+    // Clear floor hazards.
+    if (this._hazardVisuals?.length) {
+      for (const h of this._hazardVisuals) this.scene.remove(h.mesh);
+      this._hazardVisuals = [];
+    }
+    // Clear dust puffs.
+    if (this._dust?.length) {
+      for (const grp of this._dust) {
+        grp.children.forEach((m) => { m.geometry.dispose(); m.material.dispose(); });
+        this.scene.remove(grp);
+      }
+      this._dust = [];
+    }
+    // Reset opponent trainer HP bar to full.
+    this.setOppTrainerHp(1);
+  }
+
   get arenaRadius() { return ARENA_RADIUS; }
   get meleeRange() { return MELEE_RANGE; }
 }
