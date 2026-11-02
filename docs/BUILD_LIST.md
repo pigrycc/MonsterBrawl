@@ -93,9 +93,15 @@ Legend: ✅ Done · 🟡 Partial · ❌ Missing · 🚫 Needs native CI runner (
 ## §6 Spectator Interaction
 | Item | Status |
 |---|---|
-| Terraces + supply crates | ❌ |
-| Tomato / Stone / Speed Draft | ❌ |
-| Pick `[E]` / throw `LMB` | ❌ |
+| Throwables + effects (shared, unit-tested) | ✅ |
+| Rotten Tomato (5s blind trainer / 5s confuse monster) | ✅ |
+| Stone (1.5s stun trainer/monster) | ✅ |
+| Speed Draft (ally stamina/speed boost) | ✅ |
+| Projectiles arc from stands → land → apply effect | ✅ |
+| Confused-wander monster behavior in arena | ✅ |
+| Spawns on `spectatorItemSpawnRate` cadence | ✅ |
+| Verified: headless — thrown Stone stuns a monster in-arena | ✅ |
+| Manual spectator pick `[E]` / aim-throw `LMB` from stands | 🟡 (auto-crowd now; manual spectator view pairs w/ multiplayer) |
 
 ## §7 Monster Roster | ✅ (data+stats) / ❌ (3D models — procedural, upcoming)
 

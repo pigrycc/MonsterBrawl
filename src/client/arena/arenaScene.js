@@ -95,6 +95,53 @@ export class ArenaScene {
     this.scene.remove(drop.mesh);
   }
 
+  /**
+   * Spawn a flying spectator throwable that arcs from the stands to a target
+   * point on the sand (GDD §6). Returns a projectile handle the phase ticks.
+   * @param {number} color
+   * @param {THREE.Vector3} target  landing point on the arena
+   */
+  spawnThrowable(color, target) {
+    const mesh = new THREE.Mesh(
+      new THREE.IcosahedronGeometry(0.22, 0),
+      new THREE.MeshStandardMaterial({ color, emissive: color, emissiveIntensity: 0.3, flatShading: true })
+    );
+    // Launch from a random point on the elevated stands (just outside the wall).
+    const a = Math.atan2(target.z, target.x) + (Math.random() - 0.5);
+    const start = new THREE.Vector3(Math.cos(a) * (ARENA_RADIUS + 0.5), 3.5, Math.sin(a) * (ARENA_RADIUS + 0.5));
+    mesh.position.copy(start);
+    this.scene.add(mesh);
+    const proj = { mesh, start, target: target.clone(), t: 0, dur: 0.8, done: false };
+    (this._projectiles ??= []).push(proj);
+    return proj;
+  }
+
+  /** Advance projectiles; returns landed ones [{pos}] for effect resolution. */
+  _stepProjectiles(dt) {
+    const landed = [];
+    const list = this._projectiles ?? [];
+    for (const p of list) {
+      if (p.done) continue;
+      p.t += dt / p.dur;
+      if (p.t >= 1) {
+        p.mesh.position.copy(p.target);
+        p.done = true;
+        landed.push({ pos: p.target.clone(), kind: p.kind });
+        this.scene.remove(p.mesh);
+      } else {
+        // parabolic arc
+        p.mesh.position.lerpVectors(p.start, p.target, p.t);
+        p.mesh.position.y += Math.sin(p.t * Math.PI) * 3.0;
+        p.mesh.rotation.x += dt * 8; p.mesh.rotation.y += dt * 6;
+      }
+    }
+    if (list.length) this._projectiles = list.filter((p) => !p.done);
+    return landed;
+  }
+
+  /** World position of a monster view, for landing-proximity checks. */
+  monsterPos(which) { return (which === 'a' ? this.aView : this.bView).pos; }
+
   /** Flash a monster red when it takes damage. */
   flashHit(which) { (which === 'a' ? this.aView : this.bView)._hitFlash = 0.25; }
 
@@ -106,11 +153,12 @@ export class ArenaScene {
    */
   update(dt, locked) {
     const events = [];
-    if (locked) { this._animate(dt); return events; }
+    const landed = this._stepProjectiles(dt); // throwables fly even during lock
+    if (locked) { this._animate(dt); return { events, landed }; }
     this._stepMonster(this.aView, this.bView, dt, events, 'a');
     this._stepMonster(this.bView, this.aView, dt, events, 'b');
     this._animate(dt);
-    return events;
+    return { events, landed };
   }
 
   _stepMonster(self, foe, dt, events, tag) {
@@ -118,6 +166,21 @@ export class ArenaScene {
     // stun → tilt the mesh like a ragdoll, no movement
     if (c.isStunned) { self.mesh.rotation.z = Math.sin(performance.now() * 0.02) * 0.5; return; }
     self.mesh.rotation.z *= 0.8;
+
+    // Confused wander (spectator Rotten Tomato, GDD §6): move in a drifting
+    // random direction instead of toward/away from the foe.
+    if (c.isConfused) {
+      if (self._wanderDir == null || (self._wanderT = (self._wanderT ?? 0) - dt) <= 0) {
+        const a = Math.random() * Math.PI * 2;
+        self._wanderDir = new THREE.Vector3(Math.cos(a), 0, Math.sin(a));
+        self._wanderT = 0.6;
+      }
+      self.pos.addScaledVector(self._wanderDir, c.effectiveSpeed * 0.6 * dt);
+      const r = Math.hypot(self.pos.x, self.pos.z);
+      if (r > ARENA_RADIUS - 1) { const s = (ARENA_RADIUS - 1) / r; self.pos.x *= s; self.pos.z *= s; }
+      self.facing += dt * 3; // spin while dazed
+      return;
+    }
 
     const toFoe = new THREE.Vector3().subVectors(foe.pos, self.pos);
     const dist = toFoe.length();

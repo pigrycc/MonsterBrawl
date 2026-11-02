@@ -20,6 +20,7 @@ import { CombatMatch, MonsterCombatant, STANCES, MATCH_STATE } from '../../share
 import { getSkillById } from '../../shared/skills.js';
 import { DebugConfig } from '../../shared/debugConfig.js';
 import { botChooseStance, botChooseSkill } from '../../shared/bot.js';
+import { THROWABLES, THROWABLE_INFO, applyThrowable, randomThrowable } from '../../shared/throwables.js';
 
 const SHOVE_RANGE = 3.5;
 const SHOVE_DISTANCE = 4;
@@ -269,14 +270,25 @@ export class ArenaPhase {
         const kinds = ['potion', 'adrenaline', 'oil'];
         this.scene3d.spawnDrop(kinds[Math.floor(Math.random() * kinds.length)]);
       }
+
+      // Spectators in the stands lob throwables onto the arena (GDD §6). In
+      // the local prototype the "crowd" does this automatically on the
+      // spectatorItemSpawnRate cadence; in multiplayer these are driven by
+      // actual spectator inputs relayed through the host.
+      this._specTimer = (this._specTimer ?? DebugConfig.get('spectatorItemSpawnRate')) - dt;
+      if (this._specTimer <= 0) {
+        this._specTimer = DebugConfig.get('spectatorItemSpawnRate');
+        this._spawnSpectatorThrow();
+      }
     }
 
-    // Monster steering + basic-attack events
-    const events = this.scene3d.update(dt, this.match.locked);
+    // Monster steering + basic-attack events + landed spectator throwables
+    const { events, landed } = this.scene3d.update(dt, this.match.locked);
     for (const ev of events) {
       if (ev.attacker === 'a') { const d = this.match.dealDamage(this.foe, this._basicDamage(this.local), { isBasic: true }); if (d > 0) this.scene3d.flashHit('b'); }
       else { const d = this.match.dealDamage(this.local, this._basicDamage(this.foe), { isBasic: true }); if (d > 0) this.scene3d.flashHit('a'); }
     }
+    for (const l of landed) this._resolveThrowLanding(l);
 
     // HUD
     this.hud.setBars(this.local, this.foe);
@@ -289,6 +301,41 @@ export class ArenaPhase {
   }
 
   _basicDamage(c) { return getSkillById(c.def.basicAttackSkillId)?.damage ?? 12; }
+
+  /** A spectator lobs a throwable aimed near one of the monsters (GDD §6). */
+  _spawnSpectatorThrow() {
+    const kind = randomThrowable();
+    const info = THROWABLE_INFO[kind];
+    // Aim near a random monster with some scatter (spectators aren't precise).
+    const targetMon = Math.random() < 0.5 ? this.scene3d.aView : this.scene3d.bView;
+    const tp = new THREE.Vector3(
+      targetMon.pos.x + (Math.random() - 0.5) * 3,
+      0.3,
+      targetMon.pos.z + (Math.random() - 0.5) * 3
+    );
+    const proj = this.scene3d.spawnThrowable(info.color, tp);
+    proj.kind = kind;
+    this.overlay.showToast(`Crowd throws a ${info.name}!`, 900);
+  }
+
+  /** Resolve a landed throwable against whichever monster is nearby. */
+  _resolveThrowLanding(landing) {
+    // Find the projectile kind by proximity (the scene removed the mesh, so the
+    // kind rode on the landing via the nearest projectile — fall back random).
+    const kind = landing.kind ?? this._lastThrowKind ?? THROWABLES.STONE;
+    const da = Math.hypot(landing.pos.x - this.scene3d.aView.pos.x, landing.pos.z - this.scene3d.aView.pos.z);
+    const db = Math.hypot(landing.pos.x - this.scene3d.bView.pos.x, landing.pos.z - this.scene3d.bView.pos.z);
+    const hitRadius = 2.0;
+    let target = null, which = null;
+    if (da <= hitRadius && da <= db) { target = this.local; which = 'a'; }
+    else if (db <= hitRadius) { target = this.foe; which = 'b'; }
+    if (!target) return; // landed on empty sand
+    const res = applyThrowable(kind, target, { isMonster: true });
+    if (res) {
+      this.scene3d.flashHit(which);
+      this.overlay.showToast(`${THROWABLE_INFO[kind].name} hits ${target.def.name}: ${res.effect}!`, 1100);
+    }
+  }
 
   _onEnd(result) {
     if (this._finished) return;

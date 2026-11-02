@@ -51,6 +51,7 @@ export class MonsterCombatant {
     this.stunTimer = 0;         // >0 → ragdoll stunned
     this.stunCount = 0;         // for the bookmaker "stunned >=3" bet
     this.guardBasicCharges = 0; // basic attacks the defensive stance will negate
+    this.confuseTimer = 0;      // >0 → confused wander (spectator tomato, GDD §6)
 
     this.skillIds = skillIds.slice(0, 4);
     this.cooldowns = new Map(); // skillId -> seconds remaining
@@ -58,6 +59,10 @@ export class MonsterCombatant {
   }
 
   get isStunned() { return this.stunTimer > 0; }
+  get isConfused() { return this.confuseTimer > 0; }
+
+  /** Spectator Rotten Tomato on a monster → confused wander for `sec`. */
+  applyConfuse(sec) { this.confuseTimer = Math.max(this.confuseTimer, sec); }
   get staminaFraction() { return this.maxStamina > 0 ? this.stamina / this.maxStamina : 0; }
 
   /** Effective move speed accounting for low-stamina slow + stun. */
@@ -127,6 +132,8 @@ export class MonsterCombatant {
       this.stunTimer = Math.max(0, this.stunTimer - dt);
       if (this.stunTimer === 0) this.stamina = Math.max(this.stamina, 1); // wake with a sliver
     }
+    // Confuse (spectator tomato)
+    if (this.confuseTimer > 0) this.confuseTimer = Math.max(0, this.confuseTimer - dt);
     // Cooldowns
     for (const [id, cd] of this.cooldowns) {
       const n = cd - dt;
