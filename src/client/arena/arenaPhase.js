@@ -21,6 +21,7 @@ import { getSkillById } from '../../shared/skills.js';
 import { DebugConfig } from '../../shared/debugConfig.js';
 import { botChooseStance, botChooseSkill } from '../../shared/bot.js';
 import { THROWABLES, THROWABLE_INFO, applyThrowable, randomThrowable } from '../../shared/throwables.js';
+import { resolveCast } from '../../shared/slapstick.js';
 import { SFX } from '../audio/sfx.js';
 
 const SHOVE_RANGE = 3.5;
@@ -169,11 +170,21 @@ export class ArenaPhase {
     if (!this.local.canCast(skillId)) return;
     this.local.spendStamina(skill.stamina);
     this.local.startCooldown(skillId);
-    // Range/aim is abstracted for the prototype: skills hit the foe monster.
+
+    // #3 Range-based hit/miss. A miss triggers the skill's slapstick reaction
+    // on the caster's own monster (GDD §10 slapstick column).
+    const dist = Math.hypot(this.scene3d.bView.pos.x - this.scene3d.aView.pos.x, this.scene3d.bView.pos.z - this.scene3d.aView.pos.z);
+    const { hit, reaction } = resolveCast(skillId, dist);
+
     if (skill.damage > 0) {
-      const dealt = this.match.dealDamage(this.foe, skill.damage, { isBasic: false });
-      this.scene3d.flashHit('b');
-      if (dealt > 0) { SFX.impact(Math.min(1, skill.damage / 50)); this.overlay.showToast(`${skill.name} → ${dealt} dmg`, 800); }
+      if (hit) {
+        const dealt = this.match.dealDamage(this.foe, skill.damage, { isBasic: false });
+        this.scene3d.flashHit('b');
+        if (dealt > 0) { SFX.impact(Math.min(1, skill.damage / 50)); this.overlay.showToast(`${skill.name} → ${dealt} dmg`, 800); }
+      } else {
+        this.scene3d.playReaction('a', reaction);
+        this.overlay.showToast(`${skill.name} MISSED! (${skill.slapstick})`, 1600);
+      }
     } else {
       this.overlay.showToast(`${skill.name} (utility)`, 800);
     }

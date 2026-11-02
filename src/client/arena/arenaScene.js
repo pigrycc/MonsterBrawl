@@ -200,6 +200,22 @@ export class ArenaScene {
   flashHit(which) { (which === 'a' ? this.aView : this.bView)._hitFlash = 0.25; }
 
   /**
+   * #3 Trigger a slapstick miss reaction on a monster's view. The reaction is a
+   * timed physical animation (see _animateReaction). `reaction` is a REACTION
+   * value from src/shared/slapstick.js.
+   */
+  playReaction(which, reaction) {
+    const v = which === 'a' ? this.aView : this.bView;
+    v._reaction = reaction;
+    v._reactionT = 0;
+    v._reactionDur = reaction === 'PINBALL' ? 1.4 : 0.9;
+    // Capture a launch direction for recoil/pinball (away from the foe).
+    const foe = which === 'a' ? this.bView : this.aView;
+    const away = new THREE.Vector3(v.pos.x - foe.pos.x, 0, v.pos.z - foe.pos.z);
+    v._reactionDir = away.lengthSq() > 0 ? away.normalize() : new THREE.Vector3(1, 0, 0);
+  }
+
+  /**
    * Move monsters per their stance each tick. Returns basic-attack events the
    * caller should resolve into damage: [{attacker:'a'|'b'}].
    * @param {number} dt
@@ -287,6 +303,16 @@ export class ArenaScene {
   _animate(dt) {
     for (const v of [this.aView, this.bView]) {
       const c = v.combatant;
+
+      // #3 Slapstick miss reaction takes over the animation while active.
+      if (v._reaction && v._reactionT < v._reactionDur) {
+        this._animateReaction(v, dt);
+        continue;
+      } else if (v._reaction) {
+        v._reaction = null; // reaction finished → restore normal pose below
+        v.mesh.rotation.set(0, v.facing, 0);
+      }
+
       this._clampToArena(v); // belt-and-suspenders boundary enforcement (#6)
       const yBase = c.def.silhouette === 'raptor_hover' ? 0.3 : 0;
 
@@ -313,6 +339,70 @@ export class ArenaScene {
       if (v._hitFlash > 0) {
         v._hitFlash -= dt;
         v.mesh.traverse((o) => { if (o.isMesh && o.material.emissive) o.material.emissive.setHex(v._hitFlash > 0 ? 0x661111 : 0x000000); });
+      }
+    }
+  }
+
+  /** #3 Animate an in-progress slapstick miss reaction for one monster view. */
+  _animateReaction(v, dt) {
+    v._reactionT += dt;
+    const p = Math.min(1, v._reactionT / v._reactionDur); // 0..1 progress
+    const base = v.baseScale ?? 1;
+    const dir = v._reactionDir;
+    const yBase = v.combatant.def.silhouette === 'raptor_hover' ? 0.3 : 0;
+    v.mesh.scale.set(base, base, base);
+    v.mesh.rotation.set(0, v.facing, 0);
+
+    switch (v._reaction) {
+      case 'TRIP': { // stumble forward then flop flat
+        v.pos.addScaledVector(dir.clone().multiplyScalar(-1), 1.5 * dt); // lurch forward (toward foe)
+        v.mesh.rotation.x = -Math.min(Math.PI / 2, p * Math.PI);          // faceplant forward
+        v.mesh.position.set(v.pos.x, yBase + Math.sin(p * Math.PI) * 0.1, v.pos.z);
+        break;
+      }
+      case 'PANCAKE': { // flatten to the sand, then pop back
+        const flat = Math.sin(p * Math.PI);
+        v.mesh.scale.set(base * (1 + flat * 0.6), base * (1 - flat * 0.7), base * (1 + flat * 0.6));
+        v.mesh.position.set(v.pos.x, yBase, v.pos.z);
+        break;
+      }
+      case 'SPIN': { // whirl 360° from the overswing
+        v.mesh.rotation.y = v.facing + p * Math.PI * 2;
+        v.mesh.position.set(v.pos.x, yBase, v.pos.z);
+        break;
+      }
+      case 'PINBALL': { // bounce around, ricocheting off the arena bounds
+        v.pos.addScaledVector(dir, 10 * dt);
+        const r = Math.hypot(v.pos.x, v.pos.z);
+        if (r > ARENA_RADIUS - 1) { // reflect off the wall
+          const n = new THREE.Vector3(v.pos.x, 0, v.pos.z).normalize();
+          dir.reflect(n);
+          const s = (ARENA_RADIUS - 1) / r; v.pos.x *= s; v.pos.z *= s;
+        }
+        v.mesh.rotation.x += dt * 18; v.mesh.rotation.z += dt * 14;
+        v.mesh.position.set(v.pos.x, yBase + Math.abs(Math.sin(v._reactionT * 12)) * 0.4, v.pos.z);
+        break;
+      }
+      case 'RECOIL': { // launched backward, away from the foe
+        v.pos.addScaledVector(dir, 6 * (1 - p) * dt * 3);
+        this._clampToArena(v);
+        v.mesh.rotation.x = p * 0.8;
+        v.mesh.position.set(v.pos.x, yBase + Math.sin(p * Math.PI) * 0.5, v.pos.z);
+        break;
+      }
+      case 'DIZZY': { // wobble in place
+        v.mesh.rotation.z = Math.sin(v._reactionT * 18) * 0.35;
+        v.mesh.rotation.y = v.facing + Math.sin(v._reactionT * 9) * 0.3;
+        v.mesh.position.set(v.pos.x, yBase, v.pos.z);
+        break;
+      }
+      case 'FACEPLANT': { // slam face-first, stay down
+        v.mesh.rotation.x = Math.min(Math.PI / 2, p * Math.PI * 1.5);
+        v.mesh.position.set(v.pos.x, yBase, v.pos.z);
+        break;
+      }
+      default: {
+        v.mesh.position.set(v.pos.x, yBase, v.pos.z);
       }
     }
   }
