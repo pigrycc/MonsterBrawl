@@ -15,6 +15,8 @@ import { Overlay } from '../ui/overlay.js';
 import { TrainingCellScene } from './trainingCellScene.js';
 import { markTotemPurchased } from '../models/totem.js';
 import { PrepSession, PURCHASE_HOLD_SECONDS } from '../../shared/prepSession.js';
+import { DebugConfig } from '../../shared/debugConfig.js';
+import { botDraft } from '../../shared/bot.js';
 
 export class PrepPhase {
   /**
@@ -33,6 +35,15 @@ export class PrepPhase {
 
     this.session = new PrepSession({ fighters, onComplete: () => this._finish() });
     this.cell = this.session.getCell(localPlayerId);
+
+    // Bots auto-draft their 4 skills immediately (GDD §8). IDLE bots skip
+    // drafting (they're passive dummies) and rely on the arena's free-skill
+    // fallback so the bout stays valid.
+    for (const f of fighters) {
+      if (f.playerId === localPlayerId) continue;
+      const cell = this.session.getCell(f.playerId);
+      if (DebugConfig.get('botBehaviorMode') !== 'IDLE') botDraft(cell);
+    }
 
     this.scene3d = new TrainingCellScene(this.cell);
     this.camera = new THREE.PerspectiveCamera(72, window.innerWidth / window.innerHeight, 0.1, 100);

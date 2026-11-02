@@ -19,6 +19,7 @@ import { Overlay } from '../ui/overlay.js';
 import { CombatMatch, MonsterCombatant, STANCES, MATCH_STATE } from '../../shared/combat.js';
 import { getSkillById } from '../../shared/skills.js';
 import { DebugConfig } from '../../shared/debugConfig.js';
+import { botChooseStance, botChooseSkill } from '../../shared/bot.js';
 
 const SHOVE_RANGE = 3.5;
 const SHOVE_DISTANCE = 4;
@@ -172,21 +173,64 @@ export class ArenaPhase {
   _botThink(dt) {
     // IDLE profile (GDD §8): passive target dummy — no stance changes, no casts.
     if (DebugConfig.get('botBehaviorMode') === 'IDLE') return;
-    // HUMANLIKE (minimal): stay offensive, cast ready damage skills on a cadence.
+
+    // HUMANLIKE (GDD §8): stance by stamina/HP advantage, cast in range, chase
+    // drops, shove the player when adjacent.
+    this.foe.commandStance(botChooseStance(this.foe, this.local));
+
+    // Distance between the two monsters (used for skill range).
+    const dist = Math.hypot(this.scene3d.bView.pos.x - this.scene3d.aView.pos.x, this.scene3d.bView.pos.z - this.scene3d.aView.pos.z);
+
     this._botTimer -= dt;
-    if (this.foe.stance !== STANCES.OFFENSIVE && this.foe.staminaFraction > 0.3) this.foe.commandStance(STANCES.OFFENSIVE);
-    if (this.foe.staminaFraction < 0.3) this.foe.commandStance(STANCES.NEUTRAL);
     if (this._botTimer <= 0) {
-      this._botTimer = 2.0;
-      for (const id of this.foe.skillIds) {
-        const s = getSkillById(id);
-        if (s && s.damage > 0 && this.foe.canCast(id)) {
-          this.foe.spendStamina(s.stamina); this.foe.startCooldown(id);
+      const skillId = botChooseSkill(this.foe, dist, 6);
+      if (skillId != null) {
+        const s = getSkillById(skillId);
+        this.foe.spendStamina(s.stamina); this.foe.startCooldown(skillId);
+        this._botTimer = 1.5;
+        if (s.damage > 0) {
           const dealt = this.match.dealDamage(this.local, s.damage, { isBasic: false });
           if (dealt > 0) this.scene3d.flashHit('a');
-          break;
         }
+      } else {
+        this._botTimer = 0.5; // re-check soon
       }
+    }
+
+    // Bot trainer chases the nearest drop and "delivers" it to its monster.
+    this._botDrop(dt);
+
+    // Bot trainer shoves the player's monster when adjacent (GDD §8).
+    this._botShoveTimer = Math.max(0, (this._botShoveTimer ?? 0) - dt);
+    const botToPlayerMon = Math.hypot(this.scene3d.aView.pos.x - this._botTrainerPos().x, this.scene3d.aView.pos.z - this._botTrainerPos().z);
+    if (this._botShoveTimer === 0 && botToPlayerMon < 3.5) {
+      const dir = new THREE.Vector3(this.scene3d.aView.pos.x - this.scene3d.bView.pos.x, 0, this.scene3d.aView.pos.z - this.scene3d.bView.pos.z);
+      if (dir.lengthSq() > 0) { dir.normalize(); this.scene3d.aView.pos.addScaledVector(dir, 4); }
+      this._botShoveTimer = DebugConfig.get('shoveCooldownSeconds');
+    }
+  }
+
+  /** A stand-in position for the bot trainer: just behind its monster. */
+  _botTrainerPos() {
+    return { x: this.scene3d.bView.pos.x, z: this.scene3d.bView.pos.z + 1.5 };
+  }
+
+  /** Bot collects crowd drops and applies the buff to its own monster. */
+  _botDrop(dt) {
+    if (this.scene3d.drops.length === 0) return;
+    // Grab the nearest drop if the bot "reaches" it (simple timed approach).
+    const bp = this._botTrainerPos();
+    let nearest = null, nd = Infinity;
+    for (const d of this.scene3d.drops) {
+      const dd = Math.hypot(d.mesh.position.x - bp.x, d.mesh.position.z - bp.z);
+      if (dd < nd) { nd = dd; nearest = d; }
+    }
+    // Drift the bot monster toward the drop a touch (abstracted collection),
+    // then consume when close.
+    if (nearest && nd < 2.0) {
+      if (nearest.kind === 'potion') this.foe.hp = Math.min(this.foe.maxHp, this.foe.hp + 40);
+      else if (nearest.kind === 'adrenaline') this.foe.stamina = Math.min(this.foe.maxStamina, this.foe.stamina + 50);
+      this.scene3d.removeDrop(nearest);
     }
   }
 

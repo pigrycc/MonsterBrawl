@@ -99,8 +99,13 @@ Legend: ✅ Done · 🟡 Partial · ❌ Missing · 🚫 Needs native CI runner (
 ## §8 Bot Subsystem
 | Item | Status |
 |---|---|
-| Idle dummy | ❌ |
-| Humanlike (draft/stamina/skills/drops/shove) | ❌ |
+| Idle profile (passive target dummy) | ✅ |
+| Humanlike: drafts 4 affordable skills in prep | ✅ |
+| Humanlike: rest `[F]` <30% stamina, offensive `[Q]` when ahead, guard when behind | ✅ |
+| Humanlike: casts skills `[1]–[4]` when opponent in range | ✅ |
+| Humanlike: collects crowd drops + shoves player | ✅ |
+| Shared, deterministic bot brain (unit-tested) | ✅ |
+| Verified: headless — Humanlike drafts+damages, Idle passive | ✅ |
 
 ## §9 Debug Console `[~]`
 | Item | Status |
