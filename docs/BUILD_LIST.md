@@ -235,3 +235,24 @@ Legend: ✅ Done · 🟡 Partial · ❌ Missing · 🚫 Needs native CI runner (
 - Mechanics are **distinct and tested**; visuals are **archetype-shared** (all projectiles look alike, etc.) — bespoke per-skill VFX is a later polish pass.
 - A few statuses (Encore repeat, Thief item use, trainer-screen blinds) are modeled in state + events but their full feedback loops are light; flagged for follow-up.
 - Numbers (DoT dps, hazard durations, status seconds) are first-pass — needs a balance tuning pass with real play.
+
+---
+
+## Round 7 (Bo3 match structure + debug toggles)
+| # | Item | Status |
+|---|---|---|
+| 1 | Best-of-3 series: first to 2 round wins, max 3 rounds (`src/shared/series.js`) | ✅ shared, engine-agnostic, unit-tested |
+| 1 | HUD score tracker near the HP bars (`[ 1 - 0 ]` + "BEST OF 3" label) | ✅ `ArenaHud.setSeriesScore()` |
+| 1 | Round end → freeze → banner ("Round N — Winner") → ~2.8s reset → 3·2·1·GO countdown | ✅ `_onEnd`/`_startNextRound` in arenaPhase |
+| 1 | Round reset: teleport monsters+trainers to spawn, full HP/Stamina, replenish `[1]`–`[4]`, despawn drops/hazards/throwables/dust | ✅ `MonsterCombatant.resetForRound()` + `ArenaScene.resetArena()` |
+| 1 | Series clinch (2 wins) → final VICTORY/DEFEAT screen + gold payout | ✅ `_finishMatch()` |
+| 2 | `staminaRegenMultiplier` debug enum `[0.5x,1.0x,2.0x,3.0x,5.0x,10.0x]`, live, scales passive + Neutral regen | ✅ wired into `MonsterCombatant.update()` regen |
+| 3 | `godModeEnabled` debug bool (default false): local trainer+monster → permanent full HP (ignores all damage incl. DoT/hazards) + infinite stamina (no exhaustion stun) | ✅ gated in combat.js + trainerState.js, live via `DebugConfig.onChange` |
+| — | Debug console auto-renders both new vars (checkbox + dropdown) | ✅ reads registry |
+| — | 22 new tests (137 total) | ✅ `test/series.test.js` + `test/round7.test.js` |
+| — | Verified: headless render — Bo3 round-end → `1-0` tracker → spawn reset → fresh countdown → 2-0 VICTORY; god-mode toggle = 0 damage / no stun; 5.0x regen = +10/4s | ✅ |
+
+### Scope notes (honest)
+- Bo3 orchestration lives in the **single-player arena path** (the arena owns the round loop). In networked play the host owns the series, so a host `combatEnd` is treated as match-over; host-driven multi-round Bo3 replication is a follow-up.
+- God mode is **single-player only** (gated `!synced`) — networked HP is host-authoritative and not overridden by a local debug flag.
+- Round-reset restores combat + world state; it intentionally **preserves** identity (player/monster/loadout) and the god-mode flag across rounds.

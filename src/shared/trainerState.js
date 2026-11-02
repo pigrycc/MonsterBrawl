@@ -18,6 +18,7 @@ export class TrainerState {
     this.maxHp = maxHp;
     this.hp = maxHp;
     this.alive = true;
+    this.godMode = false; // #3 debug: ignore damage (local trainer)
   }
 
   get hpFraction() { return this.maxHp > 0 ? this.hp / this.maxHp : 0; }
@@ -29,6 +30,7 @@ export class TrainerState {
    */
   takeDamage(amount, source = 'monster') {
     if (!this.alive || amount <= 0) return 0;
+    if (this.godMode) { this.hp = this.maxHp; return 0; } // #3 god mode: ignore damage
     if (source !== 'monster') return 0; // trainers can't damage each other
     const dmg = Math.round(amount);
     this.hp = Math.max(0, this.hp - dmg);

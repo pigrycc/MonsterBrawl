@@ -12,6 +12,10 @@ function ensureStyle() {
     .mcb-ar-bars{position:fixed;top:14px;left:50%;transform:translateX(-50%);z-index:25;display:flex;gap:40px;
       font:12px system-ui,sans-serif;color:#e8ecf3;align-items:flex-start;}
     .mcb-ar-side{width:280px;}
+    .mcb-ar-series{align-self:center;font:800 20px ui-monospace,monospace;color:#ffd966;
+      background:rgba(14,18,28,.85);border:1px solid #2b3448;border-radius:8px;padding:4px 12px;
+      letter-spacing:1px;white-space:nowrap;text-shadow:0 2px 6px #000;}
+    .mcb-ar-series .bo3{display:block;font:600 9px system-ui,sans-serif;color:#8aa0c8;text-align:center;letter-spacing:0;}
     .mcb-ar-side.right{text-align:right;}
     .mcb-ar-name{font-weight:700;margin-bottom:3px;}
     .mcb-ar-bar{height:12px;background:#1a2233;border:1px solid #2b3448;border-radius:6px;overflow:hidden;margin-bottom:3px;}
@@ -68,6 +72,7 @@ export class ArenaHud {
         <div class="mcb-ar-bar mcb-ar-stam"><i data-lstam style="width:100%"></i></div>
         <div class="mcb-ar-stance" data-lstance>Neutral</div>
       </div>
+      <div class="mcb-ar-series" data-series title="Best of 3">0 - 0<span class="bo3">BEST OF 3</span></div>
       <div class="mcb-ar-side right">
         <div class="mcb-ar-name">${right.name}</div>
         <div class="mcb-ar-bar mcb-ar-hp"><i data-rhp style="width:100%"></i></div>
@@ -145,6 +150,15 @@ export class ArenaHud {
   showEnd(title, sub) {
     this.end.innerHTML = `<h1>${title}</h1><div class="sub">${sub}</div><div style="color:#8aa0c8;font-size:13px">Returning to lobby…</div>`;
     this.end.style.display = 'flex';
+  }
+
+  /** #1 Hide the end/round banner (used between Bo3 rounds). */
+  hideEnd() { this.end.style.display = 'none'; }
+
+  /** #1 Best-of-3 score tracker near the HP bars, e.g. "1 - 0". */
+  setSeriesScore(winsA, winsB) {
+    const el = this.bars.querySelector('[data-series]');
+    if (el) el.innerHTML = `${winsA} - ${winsB}<span class="bo3">BEST OF 3</span>`;
   }
 
   /** #2 Update the local trainer HP bar (0..1). */
