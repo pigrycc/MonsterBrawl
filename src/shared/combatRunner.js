@@ -16,9 +16,12 @@ import { botChooseStance, botChooseSkill } from './bot.js';
 import { resolveCast } from './slapstick.js';
 import { TrainerState } from './trainerState.js';
 import { DebugConfig } from './debugConfig.js';
+import { THROWABLES, THROWABLE_INFO, applyThrowable } from './throwables.js';
 
 const ARENA_R = 22;
 const MELEE = 2.4;
+const THROW_FLIGHT = 0.8;   // seconds a lobbed throwable is airborne
+const THROW_HIT_RADIUS = 2.0;
 
 export class CombatRunner {
   /**
@@ -40,6 +43,8 @@ export class CombatRunner {
     this.tick = 0;
     this._events = [];       // transient events for this tick (hits/misses/shoves)
     this._botTimers = { a: 0, b: 0 };
+    this._projectiles = [];  // authoritative spectator throwables in flight
+    this._projId = 1;
   }
 
   combatantFor(playerId) {
@@ -77,6 +82,26 @@ export class CombatRunner {
     if (c && !this.match.locked) c.setAttackTarget(target);
   }
 
+  /**
+   * Authoritative spectator throw: a spectator (not one of the two fighters)
+   * lobs a throwable to a target point on the sand. The host spawns the
+   * projectile, flies the arc, then resolves the §6 effect on whatever is near
+   * the landing — all replicated via snapshots so every client sees it.
+   * @param {string} spectatorId
+   * @param {string} kind  a THROWABLES value
+   * @param {{x:number,z:number}} target  landing point
+   */
+  cmdSpectatorThrow(spectatorId, kind, target) {
+    if (this.match.locked || this.match.state === MATCH_STATE.ENDED) return;
+    // Only non-fighters may spectator-throw (fighters use shove/skills).
+    if (this.combatantFor(spectatorId)) return;
+    if (!THROWABLES[kind] && !Object.values(THROWABLES).includes(kind)) return;
+    const K = Object.values(THROWABLES).includes(kind) ? kind : THROWABLES[kind];
+    const tx = clampArena(target?.x ?? 0), tz = clampArena(target?.z ?? 0);
+    this._projectiles.push({ id: this._projId++, kind: K, from: spectatorId, t: 0, tx, tz });
+    this._events.push({ type: 'specThrow', kind: K, x: tx, z: tz });
+  }
+
   _resolveCast(side, id) {
     const self = side === 'a' ? this.a : this.b;
     const foe = side === 'a' ? this.b : this.a;
@@ -108,6 +133,33 @@ export class CombatRunner {
   _clamp(side) {
     const p = this.pos[side]; const r = Math.hypot(p.x, p.z);
     if (r > ARENA_R - 1) { const s = (ARENA_R - 1) / r; p.x *= s; p.z *= s; }
+  }
+
+  /**
+   * Fly authoritative spectator throwables; resolve the §6 effect on landing
+   * against whichever monster is within THROW_HIT_RADIUS of the landing point.
+   * Emits 'specLand' (+ 'specEffect' on a hit) for client replication.
+   */
+  _stepProjectiles(dt) {
+    if (this._projectiles.length === 0) return;
+    const remaining = [];
+    for (const p of this._projectiles) {
+      p.t += dt;
+      if (p.t < THROW_FLIGHT) { remaining.push(p); continue; }
+      // landed — find the nearest monster to the landing point
+      const da = Math.hypot(p.tx - this.pos.a.x, p.tz - this.pos.a.z);
+      const db = Math.hypot(p.tx - this.pos.b.x, p.tz - this.pos.b.z);
+      let side = null;
+      if (da <= THROW_HIT_RADIUS && da <= db) side = 'a';
+      else if (db <= THROW_HIT_RADIUS) side = 'b';
+      this._events.push({ type: 'specLand', kind: p.kind, x: p.tx, z: p.tz });
+      if (side) {
+        const mon = side === 'a' ? this.a : this.b;
+        const res = applyThrowable(p.kind, mon, { isMonster: true });
+        if (res) this._events.push({ type: 'specEffect', kind: p.kind, target: side, effect: res.effect, durationSec: res.durationSec });
+      }
+    }
+    this._projectiles = remaining;
   }
 
   // --- host-driven bot sides ------------------------------------------------
@@ -182,6 +234,7 @@ export class CombatRunner {
     this._steer('a', dt);
     this._steer('b', dt);
     this._aggroInterception();   // #5
+    this._stepProjectiles(dt);   // authoritative spectator throwables
     this.tick++;
   }
 
@@ -245,6 +298,8 @@ export class CombatRunner {
       countdown: +Math.max(0, this.match.countdown).toFixed(2),
       a: pack(this.a, 'a'),
       b: pack(this.b, 'b'),
+      // in-flight spectator throwables so clients can render the arc
+      projectiles: this._projectiles.map((p) => ({ id: p.id, kind: p.kind, t: +p.t.toFixed(3), tx: p.tx, tz: p.tz })),
       events: this._events,
     };
   }
@@ -252,3 +307,6 @@ export class CombatRunner {
   get ended() { return this.match.state === MATCH_STATE.ENDED; }
   get result() { return this._result; }
 }
+
+/** Clamp a coordinate pair's point to stay inside the arena sand. */
+function clampArena(v) { return Math.max(-(ARENA_R - 1), Math.min(ARENA_R - 1, v)); }

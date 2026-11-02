@@ -184,6 +184,7 @@ export function startServer({ port = DEFAULT_PORT, roomName, playerLimit } = {})
         case C2S_COMBAT.SHOVE: combat?.runner.cmdShove(playerId); break;
         case C2S_COMBAT.MOVE: combat?.runner.cmdMove(playerId, data.x, data.z); break;
         case C2S_COMBAT.TARGET: combat?.runner.cmdTarget(playerId, data.target); break;
+        case C2S_COMBAT.SPEC_THROW: combat?.runner.cmdSpectatorThrow(playerId, data.kind, { x: data.x, z: data.z }); break;
         // #3 Proximity voice signaling relay (host forwards SDP/ICE to the peer).
         case C2S_VOICE.SIGNAL: {
           const target = sockets.get(data.to);

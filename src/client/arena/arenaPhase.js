@@ -397,11 +397,34 @@ export class ArenaPhase {
     this.camera.lookAt(0, 1, 0);
   }
 
+  /** #2 Elevated orbiting spectator camera over the arena. */
+  // (see _updateSpectatorCamera above)
+
+  /** #1 Spectator throw: lob the selected throwable toward a monster, authoritatively. */
+  _spectatorThrow(kind) {
+    if (!this.spectator || !this.net || this.match.state !== MATCH_STATE.ACTIVE) return;
+    // aim near a random monster with a little scatter (lobbing from the stands)
+    const target = Math.random() < 0.5 ? this.scene3d.aView : this.scene3d.bView;
+    const x = target.pos.x + (Math.random() - 0.5) * 3;
+    const z = target.pos.z + (Math.random() - 0.5) * 3;
+    this.net.combatSpecThrow(kind, x, z);
+    this.overlay.showToast(`Threw ${THROWABLE_INFO[kind].name}!`, 900);
+  }
+
   /** #2 Per-frame render for a networked (host-authoritative) bout. */
   _updateSynced(dt) {
     if (this.spectator) {
       this._updateSpectatorCamera(dt);
-      if (!this._specBannerShown) { this.overlay.showToast('👁 SPECTATING', 2500); this._specBannerShown = true; }
+      if (!this._specBannerShown) {
+        this.overlay.showToast('👁 SPECTATING — [1] Tomato · [2] Stone · [3] Draft to throw', 3500);
+        this._specBannerShown = true;
+        // spectators can throw via number keys (authoritative, relayed to host)
+        this._specSubs = [
+          this.input.onPress('Digit1', () => this._spectatorThrow(THROWABLES.ROTTEN_TOMATO)),
+          this.input.onPress('Digit2', () => this._spectatorThrow(THROWABLES.STONE)),
+          this.input.onPress('Digit3', () => this._spectatorThrow(THROWABLES.SPEED_DRAFT)),
+        ];
+      }
     } else {
       this.controller.update(dt);
       this._updateViewmodel(dt);
@@ -589,6 +612,7 @@ export class ArenaPhase {
   dispose() {
     window.removeEventListener('resize', this._onResize);
     this._subs?.forEach((off) => off());
+    this._specSubs?.forEach((off) => off()); // #1 spectator-throw key bindings
     this.controller?.dispose();
     this.hud.dispose();
     this.overlay.dispose();

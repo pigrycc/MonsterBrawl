@@ -9,8 +9,15 @@ import { createMonster } from '../models/monster.js';
 import { STANCES } from '../../shared/combat.js';
 import { createTrainer, SKIN_TONES, TUNIC_COLORS } from '../models/trainer.js';
 import { PhysicsWorld, isRapierReady } from '../physics/physicsWorld.js';
+import { THROWABLES, THROWABLE_INFO } from '../../shared/throwables.js';
 
 const ARENA_RADIUS = 22;   // #5: grand coliseum footprint (was 13)
+/** #1 Throwable mesh colors for rendering authoritative spectator projectiles. */
+const THROWABLE_COLOR = {
+  [THROWABLES.ROTTEN_TOMATO]: THROWABLE_INFO.ROTTEN_TOMATO.color,
+  [THROWABLES.STONE]: THROWABLE_INFO.STONE.color,
+  [THROWABLES.SPEED_DRAFT]: THROWABLE_INFO.SPEED_DRAFT.color,
+};
 const MELEE_RANGE = 2.4;
 
 export class ArenaScene {
@@ -338,6 +345,45 @@ export class ArenaScene {
     for (const ev of snap.events || []) {
       if (ev.type === 'miss') this.playReaction(ev.caster, ev.reaction);
       if (ev.type === 'hit' || ev.type === 'trainerHit') this.flashHit(ev.target === 'a' || ev.target === 'b' ? ev.target : 'b');
+      // authoritative spectator-throw effect landed on a monster
+      if (ev.type === 'specEffect') this.flashHit(ev.target);
+    }
+    // #1 Render authoritative spectator throwables arcing in from the stands.
+    this._renderAuthProjectiles(snap.projectiles || []);
+  }
+
+  /**
+   * Draw the host's in-flight spectator throwables. Each has a stable id; we
+   * reuse meshes across frames and lerp them along a parabolic arc from a point
+   * on the stands to the authoritative landing (tx,tz). Flight fraction = t/0.8.
+   */
+  _renderAuthProjectiles(projs) {
+    this._authProj ??= new Map();
+    const seen = new Set();
+    for (const p of projs) {
+      seen.add(p.id);
+      let mesh = this._authProj.get(p.id);
+      if (!mesh) {
+        const color = THROWABLE_COLOR[p.kind] ?? 0xffffff;
+        mesh = new THREE.Mesh(new THREE.IcosahedronGeometry(0.25, 0), new THREE.MeshStandardMaterial({ color, emissive: color, emissiveIntensity: 0.4, flatShading: true }));
+        // launch origin: a point on the stands beyond the landing bearing
+        const a = Math.atan2(p.tz, p.tx);
+        mesh.userData.start = { x: Math.cos(a) * (ARENA_RADIUS + 1), z: Math.sin(a) * (ARENA_RADIUS + 1) };
+        this.scene.add(mesh);
+        this._authProj.set(p.id, mesh);
+      }
+      const frac = Math.min(1, p.t / 0.8);
+      const s = mesh.userData.start;
+      mesh.position.set(
+        s.x + (p.tx - s.x) * frac,
+        3.5 + (0.3 - 3.5) * frac + Math.sin(frac * Math.PI) * 3.0,
+        s.z + (p.tz - s.z) * frac
+      );
+      mesh.rotation.x += 0.3; mesh.rotation.y += 0.2;
+    }
+    // remove meshes for projectiles that have landed/disappeared
+    for (const [id, mesh] of this._authProj) {
+      if (!seen.has(id)) { this.scene.remove(mesh); this._authProj.delete(id); }
     }
   }
 
@@ -355,7 +401,8 @@ export class ArenaScene {
     const v = which === 'a' ? this.aView : this.bView;
     v._reaction = reaction;
     v._reactionT = 0;
-    v._reactionDur = reaction === 'PINBALL' ? 1.4 : 0.9;
+    v._reactionDur = reaction === 'PINBALL' ? 1.5 : 1.1; // #2 longer, more readable timing
+    v._reactionCued = false; v._recoilLanded = false;    // #2 reset one-shot cues
     // Capture a launch direction for recoil/pinball (away from the foe).
     const foe = which === 'a' ? this.bView : this.aView;
     const away = new THREE.Vector3(v.pos.x - foe.pos.x, 0, v.pos.z - foe.pos.z);
@@ -374,7 +421,7 @@ export class ArenaScene {
     if (locked) {
       if (this.physics) this.physics.step(dt);
       this._syncFromPhysics();
-      this._animate(dt); this._animateCrowdAndTrainers(dt);
+      this._animate(dt); this._animateCrowdAndTrainers(dt); this._stepDust(dt);
       return { events, landed };
     }
     this._stepMonster(this.aView, this.bView, dt, events, 'a');
@@ -382,6 +429,7 @@ export class ArenaScene {
     if (this.physics) { this.physics.step(dt); this._syncFromPhysics(); }
     this._animate(dt);
     this._animateCrowdAndTrainers(dt);
+    this._stepDust(dt); // #2 slapstick dust puffs
     return { events, landed };
   }
 
@@ -611,58 +659,130 @@ export class ArenaScene {
     v.mesh.scale.set(base, base, base);
     v.mesh.rotation.set(0, v.facing, 0);
 
+    // Fire one-shot cues exactly once as the reaction begins.
+    const firstFrame = !v._reactionCued; if (firstFrame) v._reactionCued = true;
+    // Easing helpers for juicier motion.
+    const easeOutBack = (x) => { const c1 = 2.2, c3 = c1 + 1; return 1 + c3 * Math.pow(x - 1, 3) + c1 * Math.pow(x - 1, 2); };
+    const bounce = (x) => Math.abs(Math.sin(x * Math.PI * 2.5)) * (1 - x); // damped bounces
+
     switch (v._reaction) {
-      case 'TRIP': { // stumble forward then flop flat
-        v.pos.addScaledVector(dir.clone().multiplyScalar(-1), 1.5 * dt); // lurch forward (toward foe)
-        v.mesh.rotation.x = -Math.min(Math.PI / 2, p * Math.PI);          // faceplant forward
-        v.mesh.position.set(v.pos.x, yBase + Math.sin(p * Math.PI) * 0.1, v.pos.z);
+      case 'TRIP': {
+        // anticipation: brief wind-back, then an exaggerated forward faceplant + skid + dust.
+        const anticip = p < 0.15 ? -(0.15 - p) * 2 : 0; // small lean back first
+        const fall = p < 0.15 ? 0 : easeOutBack((p - 0.15) / 0.85);
+        v.pos.addScaledVector(dir.clone().multiplyScalar(-1), 2.2 * (1 - p) * dt); // skid forward, decelerating
+        v.mesh.rotation.x = anticip + -fall * (Math.PI / 2 + 0.2);
+        v.mesh.position.set(v.pos.x, yBase + Math.sin(p * Math.PI) * 0.18, v.pos.z);
+        if (firstFrame) this._spawnDust(v.pos, 0xcdb892);
         break;
       }
-      case 'PANCAKE': { // flatten to the sand, then pop back
-        const flat = Math.sin(p * Math.PI);
-        v.mesh.scale.set(base * (1 + flat * 0.6), base * (1 - flat * 0.7), base * (1 + flat * 0.6));
+      case 'PANCAKE': {
+        // squash to a wide flat disc with overshoot, then spring back up with a bounce.
+        const squashP = p < 0.45 ? easeOutBack(p / 0.45) : 1 - easeOutBack((p - 0.45) / 0.55);
+        const flat = Math.max(0, squashP);
+        v.mesh.scale.set(base * (1 + flat * 0.9), base * (1 - flat * 0.8), base * (1 + flat * 0.9));
+        v.mesh.position.set(v.pos.x, yBase + (1 - flat) * 0.05, v.pos.z);
+        if (firstFrame) this._spawnDust(v.pos, 0xcdb892, 10);
+        break;
+      }
+      case 'SPIN': {
+        // accelerate into 2 full whirls (ease-in-out), wobble, then settle.
+        const spin = (1 - Math.cos(p * Math.PI)) / 2;          // smooth 0→1
+        v.mesh.rotation.y = v.facing + spin * Math.PI * 4;      // two full turns
+        v.mesh.rotation.z = Math.sin(p * Math.PI * 6) * 0.15 * (1 - p); // dizzy lean
+        v.mesh.scale.set(base * (1 + 0.1 * Math.sin(p * Math.PI)), base, base * (1 - 0.1 * Math.sin(p * Math.PI)));
         v.mesh.position.set(v.pos.x, yBase, v.pos.z);
         break;
       }
-      case 'SPIN': { // whirl 360° from the overswing
-        v.mesh.rotation.y = v.facing + p * Math.PI * 2;
-        v.mesh.position.set(v.pos.x, yBase, v.pos.z);
-        break;
-      }
-      case 'PINBALL': { // bounce around, ricocheting off the arena bounds
-        v.pos.addScaledVector(dir, 10 * dt);
+      case 'PINBALL': {
+        // fast ricochet with stretch in the travel direction + dust on each wall bounce.
+        const speed = 13 * (1 - p * 0.5);
+        v.pos.addScaledVector(dir, speed * dt);
         const r = Math.hypot(v.pos.x, v.pos.z);
-        if (r > ARENA_RADIUS - 1) { // reflect off the wall
+        if (r > ARENA_RADIUS - 1) {
           const n = new THREE.Vector3(v.pos.x, 0, v.pos.z).normalize();
           dir.reflect(n);
           const s = (ARENA_RADIUS - 1) / r; v.pos.x *= s; v.pos.z *= s;
+          this._spawnDust(v.pos, 0xece0c8, 6);
         }
-        v.mesh.rotation.x += dt * 18; v.mesh.rotation.z += dt * 14;
-        v.mesh.position.set(v.pos.x, yBase + Math.abs(Math.sin(v._reactionT * 12)) * 0.4, v.pos.z);
+        v.mesh.rotation.x += dt * 22; v.mesh.rotation.z += dt * 16;
+        const st = 1 + 0.25 * Math.sin(v._reactionT * 20);
+        v.mesh.scale.set(base * st, base / Math.sqrt(st), base * st);
+        v.mesh.position.set(v.pos.x, yBase + Math.abs(Math.sin(v._reactionT * 10)) * 0.5, v.pos.z);
         break;
       }
-      case 'RECOIL': { // launched backward, away from the foe
-        v.pos.addScaledVector(dir, 6 * (1 - p) * dt * 3);
+      case 'RECOIL': {
+        // big launch backward + airborne tumble, land with a bounce + dust.
+        v.pos.addScaledVector(dir, 9 * Math.pow(1 - p, 1.5) * dt * 3);
         this._clampToArena(v);
-        v.mesh.rotation.x = p * 0.8;
-        v.mesh.position.set(v.pos.x, yBase + Math.sin(p * Math.PI) * 0.5, v.pos.z);
+        v.mesh.rotation.x = p * Math.PI * 0.9;
+        const air = Math.sin(Math.min(1, p / 0.7) * Math.PI) * 1.1 + bounce(p) * 0.3;
+        v.mesh.position.set(v.pos.x, yBase + Math.max(0, air), v.pos.z);
+        if (p > 0.72 && !v._recoilLanded) { v._recoilLanded = true; this._spawnDust(v.pos, 0xcdb892, 8); }
         break;
       }
-      case 'DIZZY': { // wobble in place
-        v.mesh.rotation.z = Math.sin(v._reactionT * 18) * 0.35;
-        v.mesh.rotation.y = v.facing + Math.sin(v._reactionT * 9) * 0.3;
-        v.mesh.position.set(v.pos.x, yBase, v.pos.z);
+      case 'DIZZY': {
+        // woozy figure-eight sway + head bob + slight shrink/grow.
+        v.mesh.rotation.z = Math.sin(v._reactionT * 14) * 0.4 * (1 - p * 0.5);
+        v.mesh.rotation.y = v.facing + Math.sin(v._reactionT * 7) * 0.4;
+        v.mesh.position.set(v.pos.x + Math.sin(v._reactionT * 9) * 0.12, yBase + Math.abs(Math.sin(v._reactionT * 11)) * 0.06, v.pos.z);
         break;
       }
-      case 'FACEPLANT': { // slam face-first, stay down
-        v.mesh.rotation.x = Math.min(Math.PI / 2, p * Math.PI * 1.5);
+      case 'FACEPLANT': {
+        // hard slam face-first with overshoot, brief shudder, dust burst.
+        const slam = easeOutBack(Math.min(1, p / 0.4));
+        v.mesh.rotation.x = slam * (Math.PI / 2 + 0.15) + (p > 0.4 ? Math.sin(p * 40) * 0.05 * (1 - p) : 0);
         v.mesh.position.set(v.pos.x, yBase, v.pos.z);
+        if (firstFrame) this._spawnDust(v.pos, 0xcdb892, 12);
         break;
       }
       default: {
         v.mesh.position.set(v.pos.x, yBase, v.pos.z);
       }
     }
+    if (p >= 1) v._reactionCued = false; v._recoilLanded = v._recoilLanded && p < 1;
+  }
+
+  /**
+   * #2 (tune) A short-lived dust puff of small particles kicked up by a
+   * slapstick impact — adds readable "oomph" to the comedic reactions.
+   */
+  _spawnDust(pos, color = 0xcdb892, count = 7) {
+    this._dust ??= [];
+    const grp = new THREE.Group();
+    for (let i = 0; i < count; i++) {
+      const m = new THREE.Mesh(
+        new THREE.TetrahedronGeometry(0.12 + Math.random() * 0.1, 0),
+        new THREE.MeshStandardMaterial({ color, transparent: true, opacity: 0.85, flatShading: true })
+      );
+      const a = Math.random() * Math.PI * 2, sp = 1.5 + Math.random() * 2;
+      m.position.set(pos.x, 0.2, pos.z);
+      m.userData.vel = { x: Math.cos(a) * sp, y: 2 + Math.random() * 2, z: Math.sin(a) * sp };
+      grp.add(m);
+    }
+    grp.userData.life = 0.6;
+    this.scene.add(grp);
+    this._dust.push(grp);
+  }
+
+  /** Advance + fade dust puffs; remove when expired. */
+  _stepDust(dt) {
+    if (!this._dust || this._dust.length === 0) return;
+    const alive = [];
+    for (const grp of this._dust) {
+      grp.userData.life -= dt;
+      const lifeFrac = Math.max(0, grp.userData.life / 0.6);
+      for (const m of grp.children) {
+        const vel = m.userData.vel;
+        vel.y -= 9 * dt;
+        m.position.x += vel.x * dt; m.position.y = Math.max(0.05, m.position.y + vel.y * dt); m.position.z += vel.z * dt;
+        m.rotation.x += dt * 5; m.rotation.y += dt * 4;
+        m.material.opacity = 0.85 * lifeFrac;
+      }
+      if (grp.userData.life > 0) alive.push(grp);
+      else { grp.children.forEach((m) => { m.geometry.dispose(); m.material.dispose(); }); this.scene.remove(grp); }
+    }
+    this._dust = alive;
   }
 
   /** #5 Bob the crowd (cheering) and make the opponent trainer gesture. */

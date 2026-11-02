@@ -204,3 +204,16 @@ Legend: ✅ Done · 🟡 Partial · ❌ Missing · 🚫 Needs native CI runner (
 - "NavMeshAgent pause" mapped to our steering/velocity pause (no nav-mesh engine).
 - #4/#5 run in the authoritative runner (networked) and the single-player scene.
 - Footstep *trigger cadence* is unit-tested; the audio itself needs a real device.
+
+---
+
+## Feedback round 6
+| Item | Status |
+|---|---|
+| Authoritative spectator throwing | ✅ host spawns/flies/resolves spectator throwables in CombatRunner; replicated via snapshots. Verified over the sim: spawn→arc→land→stun/confuse, empty-sand miss, fighter-rejection, arena clamp |
+| Spectator throw UI (keys [1]/[2]/[3] lob tomato/stone/draft) + client arc render | ✅ (synced; relayed as combatSpecThrow) |
+| Slapstick-miss visual tuning | ✅ anticipation + exaggerated squash/stretch, overshoot easing, bounces, longer readable timing, and dust-puff particles on impact |
+
+### Notes
+- Authoritative spectator throws lead a MOVING monster imperfectly (lobs land where aimed) — intentional; precise aiming is a later refinement.
+- Slapstick timing/feel is partly subjective — tuned for readability; adjust to taste.

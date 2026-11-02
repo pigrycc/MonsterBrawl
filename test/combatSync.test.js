@@ -182,3 +182,58 @@ test('#5 aggro interception breaks trainer-chase on monster contact', () => {
   r.update(1 / 30);
   assert.equal(r.a.attackTarget, 'monster', 'chase broken, re-locked onto enemy monster');
 });
+
+// --- Authoritative spectator throwing (round 6 #1) --------------------------
+import { THROWABLES } from '../src/shared/throwables.js';
+
+test('spectator throw: host spawns a projectile, flies it, and resolves the effect', () => {
+  fresh();
+  // both sides human (non-bot) so no bot AI moves them; we pin b in place.
+  const r = new CombatRunner({ a: { ...A }, b: { playerId: 'p2', monsterId: 'voltkid', skillIds: [1], isBot: false } });
+  for (let i = 0; i < 100; i++) r.update(1 / 30); // ACTIVE
+
+  // Pin b in place (neutral + foe far) so the lob lands on it; the throw
+  // mechanic itself is what we're testing, not target-leading.
+  r.b.commandStance('NEUTRAL');
+  r.pos.b = { x: 10, z: 0 }; r.pos.a = { x: -10, z: 0 };
+  const bx = r.pos.b.x, bz = r.pos.b.z;
+  r.cmdSpectatorThrow('spectator-1', THROWABLES.STONE, { x: bx, z: bz });
+  // projectile is airborne and present in the snapshot
+  let snap = r.snapshot();
+  assert.equal(snap.projectiles.length, 1, 'projectile in flight');
+  assert.equal(r.b.isStunned, false, 'not resolved mid-flight');
+
+  // fly past the flight time → it lands and stuns b (b stays put: neutral, foe far)
+  for (let i = 0; i < 30; i++) r.update(1 / 30); // ~1s > 0.8s flight
+  assert.equal(r.b.isStunned, true, 'stone stunned the monster it landed on');
+  snap = r.snapshot();
+  assert.equal(snap.projectiles.length, 0, 'projectile consumed on landing');
+});
+
+test('spectator throw: a landing on empty sand hits nothing', () => {
+  fresh();
+  const r = new CombatRunner({ a: A, b: B });
+  for (let i = 0; i < 100; i++) r.update(1 / 30);
+  r.pos.a = { x: -15, z: 0 }; r.pos.b = { x: 15, z: 0 };
+  r.cmdSpectatorThrow('spec', THROWABLES.STONE, { x: 0, z: 0 }); // midfield, nobody there
+  for (let i = 0; i < 30; i++) r.update(1 / 30);
+  assert.equal(r.a.isStunned, false);
+  assert.equal(r.b.isStunned, false);
+});
+
+test('spectator throw rejected from an actual fighter (only non-fighters)', () => {
+  fresh();
+  const r = new CombatRunner({ a: A, b: B });
+  for (let i = 0; i < 100; i++) r.update(1 / 30);
+  r.cmdSpectatorThrow(A.playerId, THROWABLES.STONE, { x: r.pos.b.x, z: r.pos.b.z });
+  assert.equal(r.snapshot().projectiles.length, 0, 'fighter cannot spectator-throw');
+});
+
+test('spectator throw landing point is clamped inside the arena', () => {
+  fresh();
+  const r = new CombatRunner({ a: A, b: B });
+  for (let i = 0; i < 100; i++) r.update(1 / 30);
+  r.cmdSpectatorThrow('spec', THROWABLES.ROTTEN_TOMATO, { x: 9999, z: 9999 });
+  const p = r.snapshot().projectiles[0];
+  assert.ok(Math.abs(p.tx) <= 21 && Math.abs(p.tz) <= 21, 'clamped to arena bounds');
+});
