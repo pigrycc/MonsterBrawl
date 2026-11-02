@@ -6,7 +6,7 @@
  * Kept intentionally small for this slice; it grows as netcode / host-process
  * control and voice permissions are added in later slices.
  */
-const { contextBridge } = require('electron');
+const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('mcb', {
   /** Build/runtime metadata the renderer can display. */
@@ -17,5 +17,14 @@ contextBridge.exposeInMainWorld('mcb', {
     chrome: process.versions.chrome,
     node: process.versions.node,
     isPackaged: process.env.NODE_ENV !== 'development',
+  },
+  /**
+   * Host-server control (GDD §2). The host client asks the main process to
+   * start the bundled authoritative Node server in-process, then connects to
+   * it like any other client. Returns the ws URL to connect to.
+   */
+  net: {
+    startHost: (opts) => ipcRenderer.invoke('mcb:startHost', opts),   // → {url} | {error}
+    stopHost: () => ipcRenderer.invoke('mcb:stopHost'),
   },
 });

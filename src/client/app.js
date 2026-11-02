@@ -15,6 +15,8 @@ import { LocalState } from './state/localState.js';
 import { PrepPhase } from './prep/prepPhase.js';
 import { ArenaPhase } from './arena/arenaPhase.js';
 import { DebugConsole } from './ui/debugConsole.js';
+import { MainMenu } from './ui/mainMenu.js';
+import { NetClient } from './net/netClient.js';
 import { DebugConfig } from '../shared/debugConfig.js';
 import { freeSkills } from '../shared/skills.js';
 
@@ -50,9 +52,11 @@ export class GameApp {
       this.debugConsole.toggle();
     });
 
+    this.net = null; // NetClient when in a networked session
+
     this._loop = this._loop.bind(this);
     requestAnimationFrame(this._loop);
-    this.enterLobby();
+    this._showMenu();
 
     // Debug/testability hook (also handy for manual QA). Lets you jump phases
     // without physically walking to a pedestal.
@@ -62,7 +66,68 @@ export class GameApp {
       phase: () => this.phaseName,
       state: () => LocalState.get(),
       toggleConsole: () => this.debugConsole.toggle(),
+      soloStart: () => this._startSolo(),
+      net: () => this.net,
     };
+  }
+
+  // --- MENU / NETWORKING (GDD §2) -------------------------------------------
+  _showMenu() {
+    this.menu = new MainMenu({
+      onSinglePlayer: () => this._startSolo(),
+      onHost: (opts) => this._host(opts),
+      onJoin: (opts) => this._join(opts),
+    });
+  }
+
+  _startSolo() {
+    this.menu?.hide();
+    this.enterLobby();
+  }
+
+  async _host({ roomName, playerLimit, port }) {
+    // In Electron, start the bundled server in the main process; otherwise the
+    // user runs `npm run server` and we connect to it directly.
+    let url = `ws://127.0.0.1:${port}`;
+    if (window.mcb?.net?.startHost) {
+      const res = await window.mcb.net.startHost({ roomName, playerLimit, port });
+      if (res.error) { this.menu.setStatus(`Host failed: ${res.error}`); return; }
+      url = res.url;
+    }
+    await this._connect(url, LocalState.get().appearance.name || 'Host');
+  }
+
+  async _join({ host, port }) {
+    await this._connect(`ws://${host}:${port}`, LocalState.get().appearance.name || 'Trainer');
+  }
+
+  async _connect(url, name) {
+    const net = new NetClient();
+    try {
+      await net.connect(url, name);
+    } catch (e) {
+      this.menu?.setStatus(`Connection failed: ${e.message}. (Dev: run "npm run server" first.)`);
+      return;
+    }
+    this.net = net;
+    net.on('ping', (ms) => this.menu?.setStatus(`Connected as ${net.isHost ? 'HOST' : 'guest'} · room "${net.room?.config?.roomName}"`, ms));
+    net.on('phase', (p) => { if (p.phase === 'PREP') this._onNetStart(); });
+    net.on('disconnect', () => { this.net = null; });
+    // Reflect the networked session into the local lobby and enter it.
+    LocalState.get().isHost = net.isHost;
+    this.menu?.hide();
+    this.enterLobby();
+  }
+
+  _onNetStart() {
+    // Host pressed start on the server; everyone transitions. Build fighters
+    // from the authoritative roster (bots fill per host config).
+    const room = this.net?.room;
+    if (!room) { this.startMatch(); return; }
+    // Prototype: still run the local prep→arena for the local player vs a bot;
+    // full per-client synchronized combat is a follow-up. The authoritative
+    // roster/config are already synced and drive who is present.
+    this.startMatch();
   }
 
   _swap(next, name) {
@@ -74,7 +139,17 @@ export class GameApp {
 
   // --- LOBBY ----------------------------------------------------------------
   enterLobby() {
-    this._swap(new LobbyPhase(this.renderer, this.input, () => this.startMatch()), 'LOBBY');
+    const onStart = () => {
+      if (this.net) {
+        // Networked: tell the authoritative host to start; we transition when
+        // the server broadcasts the PREP phase back to us.
+        this.net.selectMonster(LocalState.get().selectedMonsterId);
+        this.net.startMatch();
+      } else {
+        this.startMatch();
+      }
+    };
+    this._swap(new LobbyPhase(this.renderer, this.input, onStart), 'LOBBY');
   }
 
   startMatch() {

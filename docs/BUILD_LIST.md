@@ -30,13 +30,16 @@ Legend: ✅ Done · 🟡 Partial · ❌ Missing · 🚫 Needs native CI runner (
 ## §2 Networking & Multiplayer
 | Item | Status |
 |---|---|
-| Host-authoritative Node server (ws) | ❌ |
-| Client connect layer | ❌ |
-| Room browser UI | ❌ |
-| Host Game (name, 2–10 limit) | ❌ |
-| Direct IP/Port fallback | ❌ |
-| Proximity 3D voice (WebRTC + VAD) | ❌ |
-| Mute `[V]` + overhead 🔊 | ❌ |
+| Host-authoritative Node server (ws) | ✅ (server/, embedded in Electron main) |
+| Client connect layer (NetClient) | ✅ |
+| Shared protocol (C2S/S2C, versioned) | ✅ |
+| Room browser UI + Host/Join/Single-Player menu | ✅ |
+| Host Game (custom name, 2–10 limit) | ✅ |
+| Direct IP/Port fallback | ✅ |
+| Host authority (config/start gated, host promotion) | ✅ (verified over the wire) |
+| Ping round-trip | ✅ |
+| Per-client synchronized combat (all clients run same bout) | 🟡 (roster/config synced; combat sync is a follow-up) |
+| Proximity 3D voice (WebRTC + VAD) + mute `[V]` + 🔊 | ❌ (deferred — separate effort) |
 
 ## §3 Lobby & Hub
 | Item | Status |
