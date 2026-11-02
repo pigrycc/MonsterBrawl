@@ -46,17 +46,20 @@ export class PhysicsWorld {
     const floor = this.world.createRigidBody(RAPIER.RigidBodyDesc.fixed().setTranslation(0, -0.5, 0));
     this.world.createCollider(RAPIER.ColliderDesc.cuboid(radius + 4, 0.5, radius + 4).setFriction(0.8), floor);
 
-    // Coliseum wall: a ring of fixed box colliders so bodies can't escape.
-    const segs = 48;
+    // Coliseum wall: a dense ring of OVERLAPPING tall box colliders so bodies
+    // can't squeeze through the seams. (Belt: a hard radial clamp in step().)
+    const segs = 96;
     for (let i = 0; i < segs; i++) {
       const a = (i / segs) * Math.PI * 2;
-      const x = Math.cos(a) * (radius + 0.5);
-      const z = Math.sin(a) * (radius + 0.5);
-      const seg = this.world.createRigidBody(RAPIER.RigidBodyDesc.fixed().setTranslation(x, 2, z).setRotation(quatY(-a)));
-      // thin tall slab tangent to the ring
-      const w = (Math.PI * 2 * (radius + 0.5)) / segs / 2 + 0.2;
-      this.world.createCollider(RAPIER.ColliderDesc.cuboid(w, 3, 0.4).setRestitution(0.4), seg);
+      const x = Math.cos(a) * (radius + 0.6);
+      const z = Math.sin(a) * (radius + 0.6);
+      const seg = this.world.createRigidBody(RAPIER.RigidBodyDesc.fixed().setTranslation(x, 3, z).setRotation(quatY(-a)));
+      // tangent slab — width overlaps its neighbours, depth is thick, tall
+      const w = (Math.PI * 2 * (radius + 0.6)) / segs / 2 + 0.6; // overlap
+      this.world.createCollider(RAPIER.ColliderDesc.cuboid(w, 5, 1.2).setRestitution(0.3), seg);
     }
+    // The clamp limit keeps body CENTERS strictly inside (minus capsule radius).
+    this._maxBodyR = radius - 1.0;
   }
 
   /**
@@ -133,6 +136,22 @@ export class PhysicsWorld {
     // Rapier uses a fixed internal timestep; set it to match our frame.
     this.world.timestep = Math.min(dt, 1 / 30);
     this.world.step();
+
+    // Hard radial fail-safe: no matter how large an impulse, a body center can
+    // never end a step outside the arena. If it did (e.g. squeezed a seam),
+    // snap it back onto the ring and kill the outward velocity component.
+    const limit = this._maxBodyR;
+    for (const e of this.bodies.values()) {
+      const t = e.body.translation();
+      const r = Math.hypot(t.x, t.z);
+      if (r > limit) {
+        const nx = t.x / r, nz = t.z / r;
+        e.body.setTranslation({ x: nx * limit, y: t.y, z: nz * limit }, true);
+        const v = e.body.linvel();
+        const outward = v.x * nx + v.z * nz; // radial component
+        if (outward > 0) e.body.setLinvel({ x: v.x - outward * nx, y: v.y, z: v.z - outward * nz }, true);
+      }
+    }
   }
 
   dispose() { this.world.free?.(); this.bodies.clear(); }

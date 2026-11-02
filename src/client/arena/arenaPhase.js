@@ -91,6 +91,10 @@ export class ArenaPhase {
 
     this._onResize = () => { this.camera.aspect = window.innerWidth / window.innerHeight; this.camera.updateProjectionMatrix(); };
     window.addEventListener('resize', this._onResize);
+    // RMB is the shove command — stop the browser context menu stealing it.
+    this._onCtx = (e) => e.preventDefault();
+    this.renderer.domElement.addEventListener('contextmenu', this._onCtx);
+    this._lmbPrev = false;
   }
 
   _applyNetSnapshot(snap) {
@@ -151,6 +155,7 @@ export class ArenaPhase {
     this.viewmodel = vm;
     this._vmRest = { pos: vm.position.clone(), rot: vm.rotation.clone() };
     this._vmPoint = 0; // 0..1 gesture progress
+    vm.visible = false; // hidden until a skill is cast (feedback: not always on)
   }
 
   _triggerPointGesture() { this._vmPoint = 1; } // decays over time in update()
@@ -158,6 +163,9 @@ export class ArenaPhase {
   _updateViewmodel(dt) {
     if (!this.viewmodel) return;
     this._vmPoint = Math.max(0, this._vmPoint - dt * 3.5); // ~0.3s return
+    // Only visible while the point gesture is playing (cast → brief point).
+    if (this._vmPoint <= 0.001) { this.viewmodel.visible = false; return; }
+    this.viewmodel.visible = true;
     const p = this._easeOutBack(this._vmPoint);
     const rest = this._vmRest;
     // Thrust forward + raise toward center, index finger leading.
@@ -191,6 +199,7 @@ export class ArenaPhase {
   _resolveSkill(skillId) {
     const skill = getSkillById(skillId);
     if (!this.local.canCast(skillId)) return;
+    this.local.clearMoveOrder(); // casting interrupts a click-to-move order
     this.local.spendStamina(skill.stamina);
     this.local.startCooldown(skillId);
 
@@ -211,6 +220,35 @@ export class ArenaPhase {
     } else {
       this.overlay.showToast(`${skill.name} (utility)`, 800);
     }
+  }
+
+  /**
+   * Mouse commands during ACTIVE combat:
+   *   LMB (edge) → click-to-move order to the ground point under the crosshair
+   *               (overrides stance; cleared on arrival / cast / stance change).
+   *   RMB (held) → trainer shove (was LMB; rebound so LMB is the move order).
+   */
+  _handleMouseCommands(dt) {
+    // LMB edge-detect
+    const lmb = this.input.mouse.left;
+    if (lmb && !this._lmbPrev) this._issueMoveOrder();
+    this._lmbPrev = lmb;
+
+    // RMB held → shove (on cooldown)
+    if (this.input.mouse.right && this._shoveCooldown <= 0) {
+      if (this.synced) { this.net.combatShove(); SFX.impact(0.4); }
+      else this._trainerShove();
+      this._shoveCooldown = DebugConfig.get('shoveCooldownSeconds');
+    }
+    this._shoveCooldown = Math.max(0, this._shoveCooldown - dt);
+  }
+
+  _issueMoveOrder() {
+    const gp = this.scene3d.groundPointUnderCrosshair(this.camera);
+    if (!gp) return;
+    if (this.synced) this.net.combatMove(gp.x, gp.z);
+    else this.local.setMoveOrder(gp.x, gp.z);
+    this.overlay.showToast('Move order ↗', 600);
   }
 
   _trainerShove() {
@@ -331,12 +369,8 @@ export class ArenaPhase {
       setTimeout(() => this.hud.showCountdown(''), 600);
     }
 
-    // LMB shove is relayed to the host (cosmetic cooldown locally).
-    if (this.match.state === MATCH_STATE.ACTIVE && this.input.mouse.left && this._shoveCooldown <= 0) {
-      this.net.combatShove(); SFX.impact(0.4);
-      this._shoveCooldown = DebugConfig.get('shoveCooldownSeconds');
-    }
-    this._shoveCooldown = Math.max(0, this._shoveCooldown - dt);
+    // LMB move-order + RMB shove (relayed to host in synced mode).
+    if (this.match.state === MATCH_STATE.ACTIVE) this._handleMouseCommands(dt);
 
     // Render the scene from the latest snapshot (positions already applied).
     this.scene3d.update(dt, this.match.state === MATCH_STATE.COUNTDOWN);
@@ -372,9 +406,8 @@ export class ArenaPhase {
         this._windup.time -= dt;
         if (this._windup.time <= 0) { const id = this._windup.skillId; this._windup = null; this._resolveSkill(id); }
       }
-      // LMB shove (edge-detect via input.mouse)
-      if (this.input.mouse.left && this._shoveCooldown <= 0) this._trainerShove();
-      this._shoveCooldown = Math.max(0, this._shoveCooldown - dt);
+      // LMB click-to-move + RMB shove
+      this._handleMouseCommands(dt);
 
       // bot opponent
       this._botThink(dt);
@@ -469,5 +502,6 @@ export class ArenaPhase {
     this.overlay.dispose();
     this.scene3d.dispose?.(); // #1 free the Rapier world
     this._netOff?.forEach((off) => off()); // #2 unsubscribe snapshot listeners
+    this.renderer.domElement.removeEventListener('contextmenu', this._onCtx);
   }
 }

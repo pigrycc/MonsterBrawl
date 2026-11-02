@@ -61,11 +61,17 @@ export class CombatRunner {
     const d = this._dist();
     if (d <= 3.5) { this._knock(foe, 4); this._events.push({ type: 'shove', target: foe }); }
   }
+  /** LMB click-to-move order (overrides stance until reached). */
+  cmdMove(playerId, x, z) {
+    const c = this.combatantFor(playerId);
+    if (c && !this.match.locked) c.setMoveOrder(x, z);
+  }
 
   _resolveCast(side, id) {
     const self = side === 'a' ? this.a : this.b;
     const foe = side === 'a' ? this.b : this.a;
     const skill = getSkillById(id);
+    self.clearMoveOrder(); // casting a skill interrupts a click-to-move order
     self.spendStamina(skill.stamina);
     self.startCooldown(id);
     const { hit, reaction } = resolveCast(id, this._dist());
@@ -110,11 +116,21 @@ export class CombatRunner {
   _steer(side, dt) {
     const self = side === 'a' ? this.a : this.b;
     if (self.isStunned) return;
+    const p = this.pos[side];
+    const speed = self.effectiveSpeed;
+
+    // Click-to-move order overrides stance until the point is reached.
+    if (self.hasMoveOrder) {
+      const mx = self.moveOrder.x - p.x, mz = self.moveOrder.z - p.z;
+      const md = Math.hypot(mx, mz);
+      if (md <= 1.0) { self.clearMoveOrder(); } // arrived → resume stance
+      else { p.x += (mx / md) * speed * dt; p.z += (mz / md) * speed * dt; this._clamp(side); return; }
+    }
+
     const other = side === 'a' ? 'b' : 'a';
-    const p = this.pos[side], q = this.pos[other];
+    const q = this.pos[other];
     const dx = q.x - p.x, dz = q.z - p.z, d = Math.hypot(dx, dz) || 1;
     const nx = dx / d, nz = dz / d;
-    const speed = self.effectiveSpeed;
     let mx = 0, mz = 0;
     if (self.stance === STANCES.OFFENSIVE) { if (d > MELEE) { mx = nx; mz = nz; } }
     else if (self.stance === STANCES.DEFENSIVE) { if (d < MELEE * 0.8) { mx = -nx; mz = -nz; } }

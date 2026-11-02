@@ -162,3 +162,13 @@ Legend: ✅ Done · 🟡 Partial · ❌ Missing · 🚫 Needs native CI runner (
 - Combat sync is **host-authoritative state replication** (not input-lockstep) — robust against physics non-determinism; physics/ragdoll are a per-client cosmetic layer driven by authoritative positions.
 - Networked **prep-phase skill drafting** is not yet synced; networked bouts currently start fighters with free basics. Deferred.
 - The browser↔server synced render couldn't be exercised in the headless sandbox (Playwright is network-isolated from localhost); verified instead via Node client↔server integration tests + single-player headless render.
+
+---
+
+## Feedback round 3
+| Item | Status |
+|---|---|
+| Monsters can be pushed through walls | ✅ FIXED — dense overlapping wall ring + hard radial clamp in physics step; 2000-impulse spam kept both bodies at r≤10.5 in a radius-22 arena |
+| FPP hand always visible | ✅ FIXED — viewmodel hidden at rest, shows only during the active-skill point gesture (~0.3s) |
+| LMB click-to-move order (overrides stance; clears on arrival; interrupted by cast/stance change) | ✅ (shared move-order in combat model + runner + scene; works single-player and synced) |
+| Shove rebound LMB → RMB (so LMB is the move order) | ✅ + context-menu suppressed |

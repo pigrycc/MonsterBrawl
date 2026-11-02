@@ -113,6 +113,7 @@ export function startServer({ port = DEFAULT_PORT, roomName, playerLimit } = {})
         case C2S_COMBAT.STANCE: combat?.runner.cmdStance(playerId, data.stance); break;
         case C2S_COMBAT.CAST: combat?.runner.cmdCast(playerId, data.slot); break;
         case C2S_COMBAT.SHOVE: combat?.runner.cmdShove(playerId); break;
+        case C2S_COMBAT.MOVE: combat?.runner.cmdMove(playerId, data.x, data.z); break;
         case C2S.CHAT: broadcast(S2C.CHAT, { from: playerId, text: String(data.text || '').slice(0, 200) }); break;
         case C2S.PING: send(ws, S2C.PONG, { t: data.t }); break;
         default: send(ws, S2C.ERROR, { reason: 'unknown_message' });

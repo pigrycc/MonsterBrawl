@@ -55,6 +55,7 @@ export class MonsterCombatant {
     this.stunCount = 0;         // for the bookmaker "stunned >=3" bet
     this.guardBasicCharges = 0; // basic attacks the defensive stance will negate
     this.confuseTimer = 0;      // >0 → confused wander (spectator tomato, GDD §6)
+    this.moveOrder = null;      // {x,z} trainer click-to-move target (overrides stance)
 
     this.skillIds = skillIds.slice(0, 4);
     this.cooldowns = new Map(); // skillId -> seconds remaining
@@ -66,6 +67,12 @@ export class MonsterCombatant {
 
   /** Spectator Rotten Tomato on a monster → confused wander for `sec`. */
   applyConfuse(sec) { this.confuseTimer = Math.max(this.confuseTimer, sec); }
+
+  /** Trainer LMB click-to-move: walk to {x,z}, overriding stance until reached. */
+  setMoveOrder(x, z) { this.moveOrder = { x, z }; }
+  /** Cancel a move order (on cast / stance change / arrival). */
+  clearMoveOrder() { this.moveOrder = null; }
+  get hasMoveOrder() { return this.moveOrder != null; }
   get staminaFraction() { return this.maxStamina > 0 ? this.stamina / this.maxStamina : 0; }
 
   /** Effective move speed accounting for low-stamina slow + stun. */
@@ -84,6 +91,7 @@ export class MonsterCombatant {
     if (!Object.values(STANCES).includes(stance)) return false;
     if (stance === this.stance) return false;
     if (this.stanceCooldown > 0) return false; // locked out — prevents spamming
+    this.clearMoveOrder(); // changing stance interrupts a click-to-move order
     this.stance = stance;
     if (stance === STANCES.DEFENSIVE) this.guardBasicCharges = 1; // negate one basic
     this.stanceCooldown = STANCE_COOLDOWN;

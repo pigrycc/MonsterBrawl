@@ -95,6 +95,7 @@ export class NetClient {
   combatStance(stance) { this._send(C2S_COMBAT.STANCE, { stance }); }
   combatCast(slot) { this._send(C2S_COMBAT.CAST, { slot }); }
   combatShove() { this._send(C2S_COMBAT.SHOVE, {}); }
+  combatMove(x, z) { this._send(C2S_COMBAT.MOVE, { x, z }); }
 
   _startPing() {
     this._stopPing();

@@ -85,3 +85,41 @@ test('runner ends and reports a result', () => {
   assert.ok(result);
   assert.equal(result.winnerPlayerId, 'host');
 });
+
+// --- Click-to-move order (feedback round 3) --------------------------------
+
+test('move order overrides stance and walks toward the point, then clears', () => {
+  fresh();
+  const r = new CombatRunner({ a: A, b: B });
+  for (let i = 0; i < 100; i++) r.update(1 / 30); // ACTIVE
+  r.cmdStance('host', 'NEUTRAL'); // neutral would normally disengage
+  r.pos.a = { x: 0, z: 0 };
+  r.cmdMove('host', 10, 0);        // order: walk to +x
+  assert.ok(r.a.hasMoveOrder);
+  for (let i = 0; i < 90; i++) r.update(1 / 30); // ~3s of walking
+  // should have moved toward +x and (given terrataur/pyroroc speed) arrived+cleared
+  assert.ok(r.pos.a.x > 2, `moved toward target, x=${r.pos.a.x}`);
+});
+
+test('casting a skill interrupts a move order', () => {
+  fresh();
+  const r = new CombatRunner({ a: A, b: B });
+  for (let i = 0; i < 100; i++) r.update(1 / 30);
+  r.pos.a = { x: 0, z: 0 }; r.pos.b = { x: 1, z: 0 };
+  r.cmdMove('host', 20, 20);
+  assert.ok(r.a.hasMoveOrder);
+  r.a.cooldowns.clear(); r.a.stamina = 100;
+  r.cmdCast('host', 0); // Tackle
+  assert.equal(r.a.hasMoveOrder, false, 'cast cleared the move order');
+});
+
+test('changing stance interrupts a move order', () => {
+  fresh();
+  const r = new CombatRunner({ a: A, b: B });
+  for (let i = 0; i < 100; i++) r.update(1 / 30);
+  r.cmdMove('host', 15, 15);
+  assert.ok(r.a.hasMoveOrder);
+  r.a.stanceCooldown = 0;
+  r.cmdStance('host', 'OFFENSIVE');
+  assert.equal(r.a.hasMoveOrder, false, 'stance change cleared the move order');
+});

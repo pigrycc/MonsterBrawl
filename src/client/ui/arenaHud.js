@@ -80,7 +80,7 @@ export class ArenaHud {
     this.skillsEl.className = 'mcb-ar-skills';
     this.stanceKeys = document.createElement('div');
     this.stanceKeys.className = 'mcb-ar-stancekeys';
-    this.stanceKeys.innerHTML = `Stance: <b>[Q]</b> Offensive · <b>[E]</b> Defensive · <b>[F]</b> Rest · <b>[1–4]</b> Skills · <b>LMB</b> Shove`;
+    this.stanceKeys.innerHTML = `Stance: <b>[Q]</b> Offensive · <b>[E]</b> Defensive · <b>[F]</b> Rest · <b>[1–4]</b> Skills · <b>LMB</b> Move · <b>RMB</b> Shove`;
     this.count = document.createElement('div');
     this.count.className = 'mcb-count';
     this.end = document.createElement('div');

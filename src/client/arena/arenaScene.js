@@ -214,6 +214,23 @@ export class ArenaScene {
   monsterPos(which) { return (which === 'a' ? this.aView : this.bView).pos; }
 
   /**
+   * Click-to-move raycast: project screen-center (crosshair) onto the sand
+   * plane (y=0) and return the {x,z} ground point, clamped inside the arena,
+   * or null if aimed at the sky.
+   */
+  groundPointUnderCrosshair(camera) {
+    this._ray ??= new THREE.Raycaster();
+    this._groundPlane ??= new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+    this._ray.setFromCamera({ x: 0, y: 0 }, camera);
+    const hit = new THREE.Vector3();
+    if (!this._ray.ray.intersectPlane(this._groundPlane, hit)) return null;
+    const r = Math.hypot(hit.x, hit.z);
+    const lim = ARENA_RADIUS - 1;
+    if (r > lim) { const s = lim / r; hit.x *= s; hit.z *= s; }
+    return { x: hit.x, z: hit.z };
+  }
+
+  /**
    * #1 Shove/knockback a monster a given distance in a direction. Uses a real
    * physics impulse when available; otherwise moves the position directly.
    */
@@ -306,6 +323,26 @@ export class ArenaScene {
     // stun → tilt the mesh like a ragdoll, no movement
     if (c.isStunned) { self.mesh.rotation.z = Math.sin(performance.now() * 0.02) * 0.5; return; }
     self.mesh.rotation.z *= 0.8;
+
+    // Click-to-move order (LMB): walk to the point, overriding stance, until
+    // reached; then clear and resume normal stance behavior.
+    if (c.hasMoveOrder) {
+      const mx = c.moveOrder.x - self.pos.x, mz = c.moveOrder.z - self.pos.z;
+      const md = Math.hypot(mx, mz);
+      self._moving = md > 1.0;
+      if (!self._moving) { c.clearMoveOrder(); }
+      else {
+        const key = self === this.aView ? 'a' : 'b';
+        const spd = c.effectiveSpeed;
+        if (this.physics && !self._reaction) {
+          this.physics.setDesiredVelocity(key, (mx / md) * spd, (mz / md) * spd);
+        } else {
+          self.pos.x += (mx / md) * spd * dt; self.pos.z += (mz / md) * spd * dt; this._clampToArena(self);
+        }
+        self.facing = Math.atan2(mx, mz);
+        return;
+      }
+    }
 
     // Confused wander (spectator Rotten Tomato, GDD §6): move in a drifting
     // random direction instead of toward/away from the foe.

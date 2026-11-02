@@ -40,6 +40,7 @@ export const C2S_COMBAT = {
   STANCE: 'combatStance',       // {stance}
   CAST: 'combatCast',           // {slot}
   SHOVE: 'combatShove',         // {}
+  MOVE: 'combatMove',           // {x, z} LMB click-to-move order
 };
 
 /** Lobby/room phases the server advances through. */
