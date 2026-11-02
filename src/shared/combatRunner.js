@@ -14,6 +14,8 @@ import { CombatMatch, MonsterCombatant, STANCES, MATCH_STATE } from './combat.js
 import { getSkillById } from './skills.js';
 import { botChooseStance, botChooseSkill } from './bot.js';
 import { resolveCast } from './slapstick.js';
+import { TrainerState } from './trainerState.js';
+import { DebugConfig } from './debugConfig.js';
 
 const ARENA_R = 22;
 const MELEE = 2.4;
@@ -32,6 +34,9 @@ export class CombatRunner {
     this.match = new CombatMatch({ a: this.a, b: this.b, countdown: 3, onEnd: (r) => { this._result = r; onEnd?.(r); } });
     // Positions (authoritative, 2D on the sand).
     this.pos = { a: { x: -8, z: 3 }, b: { x: 8, z: 3 } };
+    // #2 Trainer HP + positions (trainers stand behind their monster's spawn).
+    this.trainer = { a: new TrainerState(a.playerId), b: new TrainerState(b.playerId) };
+    this.trainerPos = { a: { x: -10, z: 9 }, b: { x: 10, z: -9 } };
     this.tick = 0;
     this._events = [];       // transient events for this tick (hits/misses/shoves)
     this._botTimers = { a: 0, b: 0 };
@@ -65,6 +70,11 @@ export class CombatRunner {
   cmdMove(playerId, x, z) {
     const c = this.combatantFor(playerId);
     if (c && !this.match.locked) c.setMoveOrder(x, z);
+  }
+  /** #3 Set the reticle attack target ('monster' | 'trainer'). */
+  cmdTarget(playerId, target) {
+    const c = this.combatantFor(playerId);
+    if (c && !this.match.locked) c.setAttackTarget(target);
   }
 
   _resolveCast(side, id) {
@@ -115,7 +125,7 @@ export class CombatRunner {
 
   _steer(side, dt) {
     const self = side === 'a' ? this.a : this.b;
-    if (self.isStunned) return;
+    if (self.isIncapacitated) return; // #1 stunned OR getting up → no movement
     const p = this.pos[side];
     const speed = self.effectiveSpeed;
 
@@ -128,15 +138,38 @@ export class CombatRunner {
     }
 
     const other = side === 'a' ? 'b' : 'a';
-    const q = this.pos[other];
-    const dx = q.x - p.x, dz = q.z - p.z, d = Math.hypot(dx, dz) || 1;
+    const enemyMon = this.pos[other];
+
+    // #3 Offensive target: enemy monster, or the enemy trainer if commanded.
+    const chasingTrainer = self.stance === STANCES.OFFENSIVE && self.attackTarget === 'trainer';
+    const target = chasingTrainer ? this.trainerPos[other] : enemyMon;
+    const dx = target.x - p.x, dz = target.z - p.z, d = Math.hypot(dx, dz) || 1;
     const nx = dx / d, nz = dz / d;
+
     let mx = 0, mz = 0;
-    if (self.stance === STANCES.OFFENSIVE) { if (d > MELEE) { mx = nx; mz = nz; } }
-    else if (self.stance === STANCES.DEFENSIVE) { if (d < MELEE * 0.8) { mx = -nx; mz = -nz; } }
+    if (self.stance === STANCES.OFFENSIVE) {
+      if (d > MELEE) { mx = nx; mz = nz; }
+      else {
+        // strike the target on a cadence
+        self._basicT = (self._basicT ?? 0) - dt;
+        if (self._basicT <= 0 && self.stamina >= 8) {
+          self._basicT = 1.2; self.spendStamina(8);
+          if (chasingTrainer) {
+            const dealt = this.trainer[other].takeDamage(this._basicDmg(self), 'monster');
+            this._events.push({ type: 'trainerHit', target: other, dmg: dealt });
+          } else {
+            const foeC = other === 'a' ? this.a : this.b;
+            const dealt = this.match.dealDamage(foeC, this._basicDmg(self), { isBasic: true });
+            this._events.push({ type: 'hit', target: other, dmg: dealt });
+          }
+        }
+      }
+    } else if (self.stance === STANCES.DEFENSIVE) { if (d < MELEE * 0.8) { mx = -nx; mz = -nz; } }
     else { if (d < MELEE * 2) { mx = -nx; mz = -nz; } }
     if (mx || mz) { p.x += mx * speed * dt; p.z += mz * speed * dt; this._clamp(side); }
   }
+
+  _basicDmg(c) { return getSkillById(c.def.basicAttackSkillId)?.damage ?? 12; }
 
   update(dt) {
     this._events = [];
@@ -145,9 +178,52 @@ export class CombatRunner {
     // host drives any bot sides
     if (this.aMeta.isBot) this._botThink('a', dt);
     if (this.bMeta.isBot) this._botThink('b', dt);
+    this._aiTrainerReaction(dt); // #4
     this._steer('a', dt);
     this._steer('b', dt);
+    this._aggroInterception();   // #5
     this.tick++;
+  }
+
+  /**
+   * #4 AI trainer reaction: when the human monster (a) is in OFFENSIVE stance
+   * targeting the bot's trainer (b), the bot trainer waits a configurable delay,
+   * then (1) kites away from the approaching monster and (2) commands its own
+   * monster to Offensive-target the player's monster to intercept.
+   */
+  _aiTrainerReaction(dt) {
+    if (!this.bMeta.isBot) { this._reactT = 0; return; }
+    const beingChased = this.a.stance === STANCES.OFFENSIVE && this.a.attackTarget === 'trainer';
+    if (!beingChased) { this._reactT = 0; return; }
+    this._reactT = (this._reactT ?? 0) + dt;
+    const delay = DebugConfig.get('aiTrainerReactionSeconds');
+    if (this._reactT < delay) return; // reaction latency — punish window for the player
+    // (1) kite away from the chasing monster
+    const t = this.trainerPos.b, m = this.pos.a;
+    const dx = t.x - m.x, dz = t.z - m.z, d = Math.hypot(dx, dz) || 1;
+    const kite = this.b.baseSpeed * 1.2 * dt; // sprint
+    t.x += (dx / d) * kite; t.z += (dz / d) * kite;
+    const r = Math.hypot(t.x, t.z); if (r > ARENA_R - 1) { const s = (ARENA_R - 1) / r; t.x *= s; t.z *= s; }
+    // (2) retaliate: bot monster goes offensive at the player monster
+    this.b.setAttackTarget('monster');
+    this.b.commandStance(STANCES.OFFENSIVE);
+    if (!this._reactedOnce) { this._reactedOnce = true; this._events.push({ type: 'aiTrainerReact', side: 'b' }); }
+  }
+
+  /**
+   * #5 Aggro interception (bodyguard): if a monster chasing the enemy TRAINER
+   * is in melee contact with the enemy MONSTER, its trainer-focus is broken and
+   * it locks back onto the enemy monster.
+   */
+  _aggroInterception() {
+    const contact = this._dist() <= MELEE * 1.1;
+    if (!contact) return;
+    for (const [side, c] of [['a', this.a], ['b', this.b]]) {
+      if (c.stance === STANCES.OFFENSIVE && c.attackTarget === 'trainer') {
+        c.setAttackTarget('monster');
+        this._events.push({ type: 'intercepted', side });
+      }
+    }
   }
 
   /** Serializable authoritative snapshot (sent to clients each tick). */
@@ -155,9 +231,12 @@ export class CombatRunner {
     const pack = (c, side) => ({
       hp: Math.round(c.hp), maxHp: c.maxHp,
       stamina: Math.round(c.stamina), maxStamina: c.maxStamina,
-      stance: c.stance, stunned: c.isStunned, confused: c.isConfused,
+      stance: c.stance, stunned: c.isStunned, gettingUp: c.isGettingUp, confused: c.isConfused,
+      attackTarget: c.attackTarget,
       monsterId: c.monsterId, playerId: c.playerId,
       x: +this.pos[side].x.toFixed(2), z: +this.pos[side].z.toFixed(2),
+      trainerHp: Math.round(this.trainer[side].hp), trainerMaxHp: this.trainer[side].maxHp,
+      trainerX: +this.trainerPos[side].x.toFixed(2), trainerZ: +this.trainerPos[side].z.toFixed(2),
     });
     return {
       tick: this.tick,

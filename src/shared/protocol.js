@@ -48,6 +48,7 @@ export const C2S_COMBAT = {
   CAST: 'combatCast',           // {slot}
   SHOVE: 'combatShove',         // {}
   MOVE: 'combatMove',           // {x, z} LMB click-to-move order
+  TARGET: 'combatTarget',       // {target:'monster'|'trainer'} #3 reticle target
 };
 
 /** Client → Host: prep-phase intents (networked drafting). */

@@ -123,3 +123,62 @@ test('changing stance interrupts a move order', () => {
   r.cmdStance('host', 'OFFENSIVE');
   assert.equal(r.a.hasMoveOrder, false, 'stance change cleared the move order');
 });
+
+// --- Round 5: reticle target, AI reaction, interception ---------------------
+import { TRAINER_MAX_HP } from '../src/shared/trainerState.js';
+
+const BOTB = { playerId: 'bot', monsterId: 'voltkid', skillIds: [1, 5], isBot: true };
+
+test('#3 reticle target command routes pursuit to the enemy trainer', () => {
+  fresh();
+  const r = new CombatRunner({ a: A, b: BOTB });
+  for (let i = 0; i < 100; i++) r.update(1 / 30); // ACTIVE
+  r.cmdTarget('host', 'trainer');
+  r.cmdStance('host', 'OFFENSIVE');
+  assert.equal(r.a.attackTarget, 'trainer');
+  // place the player monster onto the bot trainer and tick → trainer takes dmg
+  r.pos.a = { x: r.trainerPos.b.x, z: r.trainerPos.b.z };
+  const before = r.trainer.b.hp;
+  for (let i = 0; i < 60; i++) r.update(1 / 30);
+  assert.ok(r.trainer.b.hp < before, 'enemy trainer took monster damage');
+});
+
+test('#2 trainers cannot damage each other; monsters can damage trainers', () => {
+  fresh();
+  const r = new CombatRunner({ a: A, b: BOTB });
+  assert.equal(r.trainer.a.maxHp, TRAINER_MAX_HP);
+  assert.equal(r.trainer.a.takeDamage(20, 'trainer'), 0, 'trainer-vs-trainer rejected');
+  assert.ok(r.trainer.a.takeDamage(20, 'monster') > 0, 'monster-vs-trainer allowed');
+});
+
+test('#4 AI trainer waits the reaction delay, then evades + retaliates', () => {
+  fresh();
+  DebugConfig.set('aiTrainerReactionSeconds', 1.0);
+  const r = new CombatRunner({ a: A, b: BOTB });
+  for (let i = 0; i < 100; i++) r.update(1 / 30);
+  r.cmdTarget('host', 'trainer'); r.cmdStance('host', 'OFFENSIVE');
+  r.pos.a = { x: 0, z: 0 }; r.pos.b = { x: 15, z: 0 }; // keep monsters apart (no interception)
+  r.trainerPos.b = { x: 2, z: 0 };
+  const t0 = { ...r.trainerPos.b };
+  // within the delay: trainer shouldn't have kited yet
+  r.update(0.3);
+  assert.ok(Math.hypot(r.trainerPos.b.x - t0.x, r.trainerPos.b.z - t0.z) < 0.01, 'no reaction before delay');
+  // after the delay: trainer kites away AND its monster retaliates at the player
+  for (let i = 0; i < 40; i++) r.update(1 / 30);
+  assert.ok(Math.hypot(r.trainerPos.b.x - t0.x, r.trainerPos.b.z - t0.z) > 0.1, 'bot trainer kited away');
+  assert.equal(r.b.stance, 'OFFENSIVE');
+  assert.equal(r.b.attackTarget, 'monster');
+  fresh();
+});
+
+test('#5 aggro interception breaks trainer-chase on monster contact', () => {
+  fresh();
+  const r = new CombatRunner({ a: A, b: BOTB });
+  for (let i = 0; i < 100; i++) r.update(1 / 30);
+  r.cmdTarget('host', 'trainer'); r.cmdStance('host', 'OFFENSIVE');
+  assert.equal(r.a.attackTarget, 'trainer');
+  // put the two monsters in contact → interception
+  r.pos.a = { x: 0, z: 0 }; r.pos.b = { x: 1, z: 0 };
+  r.update(1 / 30);
+  assert.equal(r.a.attackTarget, 'monster', 'chase broken, re-locked onto enemy monster');
+});

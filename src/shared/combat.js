@@ -25,6 +25,7 @@ export const STANCE_COOLDOWN = 2.0;        // seconds locked out after a switch
 export const LOW_STAMINA_FRACTION = 0.5;   // below this → slowed
 export const LOW_STAMINA_SLOW = 0.7;       // 30% slower → 0.7x speed
 export const STUN_DURATION = 3.0;          // 0-stamina ragdoll stun
+export const GET_UP_DURATION = 1.0;        // #1 get-up animation (movement locked)
 export const REGEN_REST_PER_SEC = 0.5;     // +1 / 2s
 export const REGEN_COMBAT_PER_SEC = 0.25;  // +1 / 4s
 export const DEFENSIVE_SKILL_MULT = 0.5;   // −50% skill damage while defending
@@ -52,10 +53,12 @@ export class MonsterCombatant {
     this.stanceCooldown = 0;    // >0 → cannot switch yet (post-switch lockout, #2)
 
     this.stunTimer = 0;         // >0 → ragdoll stunned
+    this.getUpTimer = 0;        // >0 → playing the Get-Up animation (movement locked, #1)
     this.stunCount = 0;         // for the bookmaker "stunned >=3" bet
     this.guardBasicCharges = 0; // basic attacks the defensive stance will negate
     this.confuseTimer = 0;      // >0 → confused wander (spectator tomato, GDD §6)
     this.moveOrder = null;      // {x,z} trainer click-to-move target (overrides stance)
+    this.attackTarget = 'monster'; // #3 'monster' | 'trainer' — who OFFENSIVE chases
 
     this.skillIds = skillIds.slice(0, 4);
     this.cooldowns = new Map(); // skillId -> seconds remaining
@@ -63,10 +66,16 @@ export class MonsterCombatant {
   }
 
   get isStunned() { return this.stunTimer > 0; }
+  get isGettingUp() { return this.getUpTimer > 0; }
+  /** #1 True while stunned OR getting up — movement/actions stay locked. */
+  get isIncapacitated() { return this.stunTimer > 0 || this.getUpTimer > 0; }
   get isConfused() { return this.confuseTimer > 0; }
 
   /** Spectator Rotten Tomato on a monster → confused wander for `sec`. */
   applyConfuse(sec) { this.confuseTimer = Math.max(this.confuseTimer, sec); }
+
+  /** #3 Set who the Offensive stance pursues: the enemy 'monster' or 'trainer'. */
+  setAttackTarget(which) { if (which === 'monster' || which === 'trainer') this.attackTarget = which; }
 
   /** Trainer LMB click-to-move: walk to {x,z}, overriding stance until reached. */
   setMoveOrder(x, z) { this.moveOrder = { x, z }; }
@@ -75,9 +84,9 @@ export class MonsterCombatant {
   get hasMoveOrder() { return this.moveOrder != null; }
   get staminaFraction() { return this.maxStamina > 0 ? this.stamina / this.maxStamina : 0; }
 
-  /** Effective move speed accounting for low-stamina slow + stun. */
+  /** Effective move speed — zero while stunned OR getting up (#1). */
   get effectiveSpeed() {
-    if (this.isStunned) return 0;
+    if (this.isIncapacitated) return 0;
     return this.baseSpeed * (this.staminaFraction < LOW_STAMINA_FRACTION ? LOW_STAMINA_SLOW : 1);
   }
 
@@ -112,7 +121,7 @@ export class MonsterCombatant {
   }
 
   canCast(skillId) {
-    if (this.isStunned || !this.alive) return false;
+    if (this.isIncapacitated || !this.alive) return false;
     if (!this.skillIds.includes(skillId)) return false;
     if ((this.cooldowns.get(skillId) ?? 0) > 0) return false;
     const skill = getSkillById(skillId);
@@ -142,10 +151,15 @@ export class MonsterCombatant {
   update(dt) {
     // Stance switch lockout (#2): decays after an instant switch.
     if (this.stanceCooldown > 0) this.stanceCooldown = Math.max(0, this.stanceCooldown - dt);
-    // Stun
+    // #1 Ragdoll → Get-Up → Active recovery state machine.
     if (this.stunTimer > 0) {
       this.stunTimer = Math.max(0, this.stunTimer - dt);
-      if (this.stunTimer === 0) this.stamina = Math.max(this.stamina, 1); // wake with a sliver
+      if (this.stunTimer === 0) {
+        this.stamina = Math.max(this.stamina, 1); // wake with a sliver
+        this.getUpTimer = GET_UP_DURATION;        // enter Get-Up (movement stays locked)
+      }
+    } else if (this.getUpTimer > 0) {
+      this.getUpTimer = Math.max(0, this.getUpTimer - dt);
     }
     // Confuse (spectator tomato)
     if (this.confuseTimer > 0) this.confuseTimer = Math.max(0, this.confuseTimer - dt);

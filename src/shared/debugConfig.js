@@ -46,6 +46,8 @@ define({ key: 'forceLocalMonsterType', label: 'Force Local Monster', type: 'enum
 // Feedback round 1 (#8): tuning multipliers.
 define({ key: 'skillCooldownMultiplier', label: 'Skill Cooldown ×', type: 'enum', default: '1x', options: ['1x', '2x', '3x', '4x', '5x', '6x'], help: 'Scales all active skill cooldowns.' });
 define({ key: 'monsterHpMultiplier', label: 'Monster HP ×', type: 'enum', default: '1x', options: ['1x', '2x', '3x', '4x', '5x', '6x'], help: 'Scales monster max (and proportional current) HP.' });
+// Round 5 (#4): AI trainer reaction latency before evading a hostile monster.
+define({ key: 'aiTrainerReactionSeconds', label: 'AI Trainer Reaction (s)', type: 'float', default: 3.0, min: 0, max: 10, help: 'Delay before an AI trainer reacts to being chased.' });
 
 /** Change listeners for hot-reload propagation. @type {Set<Function>} */
 const listeners = new Set();

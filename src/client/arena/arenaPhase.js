@@ -22,7 +22,9 @@ import { DebugConfig } from '../../shared/debugConfig.js';
 import { botChooseStance, botChooseSkill } from '../../shared/bot.js';
 import { THROWABLES, THROWABLE_INFO, applyThrowable, randomThrowable } from '../../shared/throwables.js';
 import { resolveCast } from '../../shared/slapstick.js';
+import { TrainerState } from '../../shared/trainerState.js';
 import { SFX } from '../audio/sfx.js';
+import { FootstepTracker } from '../audio/footsteps.js';
 
 const SHOVE_RANGE = 3.5;
 const SHOVE_DISTANCE = 4;
@@ -62,7 +64,12 @@ export class ArenaPhase {
     this.match = new CombatMatch({ a: this.local, b: this.foe, countdown: 3, onEnd: (r) => this._onEnd(r) });
     this.scene3d = new ArenaScene({ a: this.local, b: this.foe });
 
+    // #2 Trainer HP states (a = local/left trainer, b = opponent/right trainer).
+    this.trainerA = new TrainerState(localF.playerId);
+    this.trainerB = new TrainerState(foeF.playerId);
+
     this.camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 200);
+    this.scene3d._camera = this.camera; // #2 overhead-bar billboarding
     if (this.spectator) {
       // #2 Spectator: an elevated camera that slowly orbits the arena from the
       // stands. No FPP controller, no viewmodel, no combat input.
@@ -100,6 +107,9 @@ export class ArenaPhase {
       ];
     }
 
+    this._footsteps = new FootstepTracker(1.9); // #6
+    this._lastCamPos = null;
+
     this._onResize = () => { this.camera.aspect = window.innerWidth / window.innerHeight; this.camera.updateProjectionMatrix(); };
     window.addEventListener('resize', this._onResize);
     // RMB is the shove command — stop the browser context menu stealing it.
@@ -116,16 +126,27 @@ export class ArenaPhase {
     this.match.countdown = snap.countdown;
   }
 
+  _setStance(s) {
+    if (this.match.locked) return;
+    if (this.synced) { this.net.combatStance(s); this.overlay.showToast(`Stance → ${s}`, 800); return; }
+    if (this.local.commandStance(s)) this.overlay.showToast(`Stance → ${s}`, 800);
+    else if (this.local.stanceCooldownRemaining > 0) this.overlay.showToast(`Stance on cooldown (${this.local.stanceCooldownRemaining.toFixed(1)}s)`, 700);
+  }
+
+  /** #3 [Q]: target whatever the crosshair is on (enemy monster or trainer), then go Offensive. */
+  _offensiveQ() {
+    if (this.match.locked) return;
+    const tgt = this._hoverTarget || 'monster';
+    if (this.synced) { this.net.combatTarget?.(tgt); } else { this.local.setAttackTarget(tgt); }
+    this.overlay.showToast(tgt === 'trainer' ? 'Target: ENEMY TRAINER' : 'Target: enemy monster', 900);
+    this._setStance(STANCES.OFFENSIVE);
+  }
+
   _bindInput() {
     if (this.spectator) { this._subs = []; return; } // #2 spectators don't control a monster
-    const stance = (s) => {
-      if (this.match.locked) return;
-      if (this.synced) { this.net.combatStance(s); this.overlay.showToast(`Stance → ${s}`, 800); return; }
-      if (this.local.commandStance(s)) this.overlay.showToast(`Stance → ${s}`, 800);
-      else if (this.local.stanceCooldownRemaining > 0) this.overlay.showToast(`Stance on cooldown (${this.local.stanceCooldownRemaining.toFixed(1)}s)`, 700);
-    };
+    const stance = (s) => this._setStance(s);
     this._subs = [
-      this.input.onPress('KeyQ', () => stance(STANCES.OFFENSIVE)),
+      this.input.onPress('KeyQ', () => this._offensiveQ()),
       this.input.onPress('KeyE', () => this._onE()),
       this.input.onPress('KeyF', () => stance(STANCES.NEUTRAL)),
       this.input.onPress('Digit1', () => this._castSlot(0)),
@@ -384,6 +405,7 @@ export class ArenaPhase {
     } else {
       this.controller.update(dt);
       this._updateViewmodel(dt);
+      this._updateFootsteps(); // #6
     }
 
     // Countdown overlay from the authoritative snapshot.
@@ -402,6 +424,12 @@ export class ArenaPhase {
     this.scene3d.update(dt, this.match.state === MATCH_STATE.COUNTDOWN);
     this.hud.setNetStatus(this.net?.ping ?? null); // #4 latency readout
     this.hud.setBars(this.local, this.foe);
+    // #2 local trainer HP from the authoritative snapshot (local = our side).
+    const snapT = this.scene3d._snapTrainer;
+    if (snapT) {
+      const mine = snapT.a.playerId === this.localPlayerId ? snapT.a : snapT.b;
+      if (mine.trainerMaxHp) this.hud.setTrainerHp(mine.trainerHp / mine.trainerMaxHp);
+    }
     this.hud.setClock(this.match.clock, this.match.state === MATCH_STATE.SUDDEN_DEATH);
     this.hud.renderSkills(this.local.cooldowns);
     this.renderer.render(this.scene3d.scene, this.camera);
@@ -416,6 +444,7 @@ export class ArenaPhase {
     this.match.update(dt);
     this.controller.update(dt);
     this._updateViewmodel(dt); // #3 pointing-hand animation
+    this._updateFootsteps();   // #6
 
     // Countdown overlay (3·2·1·GO!)
     if (this.match.locked) {
@@ -461,13 +490,32 @@ export class ArenaPhase {
     // Monster steering + basic-attack events + landed spectator throwables
     const { events, landed } = this.scene3d.update(dt, this.match.locked);
     for (const ev of events) {
-      if (ev.attacker === 'a') { const d = this.match.dealDamage(this.foe, this._basicDamage(this.local), { isBasic: true }); if (d > 0) { this.scene3d.flashHit('b'); SFX.impact(0.4); } }
-      else { const d = this.match.dealDamage(this.local, this._basicDamage(this.foe), { isBasic: true }); if (d > 0) { this.scene3d.flashHit('a'); SFX.hurt(); } }
+      if (ev.attacker === 'a') {
+        if (ev.vsTrainer) { // #2/#3 the player's monster strikes the enemy trainer
+          const d = this.trainerB.takeDamage(this._basicDamage(this.local), 'monster');
+          if (d > 0) { SFX.impact(0.4); this.overlay.showToast(`Hit enemy trainer −${d}`, 700); }
+        } else {
+          const d = this.match.dealDamage(this.foe, this._basicDamage(this.local), { isBasic: true });
+          if (d > 0) { this.scene3d.flashHit('b'); SFX.impact(0.4); }
+        }
+      } else {
+        const d = this.match.dealDamage(this.local, this._basicDamage(this.foe), { isBasic: true });
+        if (d > 0) { this.scene3d.flashHit('a'); SFX.hurt(); }
+      }
     }
     for (const l of landed) this._resolveThrowLanding(l);
 
+    // #3 Reticle hover + #5 single-player interception (break trainer focus on contact)
+    this._hoverTarget = this.scene3d.reticleTarget(this.camera);
+    if (this.local.attackTarget === 'trainer') {
+      const d = Math.hypot(this.scene3d.aView.pos.x - this.scene3d.bView.pos.x, this.scene3d.aView.pos.z - this.scene3d.bView.pos.z);
+      if (d <= this.scene3d.meleeRange * 1.1) this.local.setAttackTarget('monster'); // intercepted
+    }
+
     // HUD
     this.hud.setBars(this.local, this.foe);
+    this.hud.setTrainerHp(this.trainerA.hpFraction); // #2
+    this.scene3d.setOppTrainerHp?.(this.trainerB.hpFraction); // #2 overhead
     this.hud.setClock(this.match.clock, this.match.state === MATCH_STATE.SUDDEN_DEATH);
     this.hud.renderSkills(this.local.cooldowns);
     if (this._carrying) this.overlay.showPrompt(`Carrying <b>${this._carrying.kind}</b> — <b>[E]</b> near your monster to deliver`);
@@ -477,6 +525,18 @@ export class ArenaPhase {
   }
 
   _basicDamage(c) { return getSkillById(c.def.basicAttackSkillId)?.damage ?? 12; }
+
+  /** #6 Play footstep SFX based on how far the FPP camera moved this frame. */
+  _updateFootsteps() {
+    if (this.spectator || !this.controller) return;
+    const p = this.controller.position;
+    if (this._lastCamPos) {
+      const moved = Math.hypot(p.x - this._lastCamPos.x, p.z - this._lastCamPos.z);
+      const steps = this._footsteps.advance(moved);
+      for (let i = 0; i < steps; i++) SFX.footstep();
+    }
+    this._lastCamPos = { x: p.x, z: p.z };
+  }
 
   /** A spectator lobs a throwable aimed near one of the monsters (GDD §6). */
   _spawnSpectatorThrow() {

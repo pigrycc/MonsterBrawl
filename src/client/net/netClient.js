@@ -100,6 +100,7 @@ export class NetClient {
   combatCast(slot) { this._send(C2S_COMBAT.CAST, { slot }); }
   combatShove() { this._send(C2S_COMBAT.SHOVE, {}); }
   combatMove(x, z) { this._send(C2S_COMBAT.MOVE, { x, z }); }
+  combatTarget(target) { this._send(C2S_COMBAT.TARGET, { target }); }
   // #1 prep intents
   prepBuy(totemIndex) { this._send(C2S_PREP.BUY, { totemIndex }); }
   prepReady() { this._send(C2S_PREP.READY, {}); }

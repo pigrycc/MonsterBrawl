@@ -124,6 +124,36 @@ export class ArenaScene {
     this.oppTrainer.position.set(10, 0, -9);   // opposite side (GDD #5)
     this.oppTrainer.rotation.y = Math.PI - 0.4;
     this.scene.add(this.oppTrainer);
+    // #2 Overhead world-space HP bar above the opponent trainer.
+    this.oppTrainerBar = this._makeOverheadBar();
+    this.oppTrainerBar.position.set(0, 2.1, 0);
+    this.oppTrainer.add(this.oppTrainerBar);
+  }
+
+  /** #2 A small billboarded red/green HP bar (background + fill) for overhead use. */
+  _makeOverheadBar() {
+    const g = new THREE.Group();
+    const bg = new THREE.Mesh(new THREE.PlaneGeometry(1.2, 0.18), new THREE.MeshBasicMaterial({ color: 0x1a2233, depthTest: false }));
+    const fill = new THREE.Mesh(new THREE.PlaneGeometry(1.14, 0.12), new THREE.MeshBasicMaterial({ color: 0x39d98a, depthTest: false }));
+    fill.position.z = 0.01; fill.renderOrder = 999; bg.renderOrder = 998;
+    g.add(bg, fill);
+    g.userData.fill = fill;
+    return g;
+  }
+
+  /** Billboard the overhead bar to face the camera (called each frame). */
+  _billboardBars(camera) {
+    if (this.oppTrainerBar && camera) this.oppTrainerBar.lookAt(camera.position);
+  }
+
+  /** #2 Set the opponent trainer's overhead HP fraction (0..1). */
+  setOppTrainerHp(frac) {
+    const fill = this.oppTrainerBar?.userData.fill;
+    if (!fill) return;
+    const f = Math.max(0, Math.min(1, frac));
+    fill.scale.x = f || 0.001;
+    fill.position.x = -(1.14 / 2) * (1 - f); // left-anchor the shrink
+    fill.material.color.setHex(f > 0.3 ? 0x39d98a : 0xef4444);
   }
 
   _spawnMonster(combatant, pos) {
@@ -213,6 +243,36 @@ export class ArenaScene {
   /** World position of a monster view, for landing-proximity checks. */
   monsterPos(which) { return (which === 'a' ? this.aView : this.bView).pos; }
 
+  /** World position of the opponent trainer (for #3 trainer-targeting). */
+  get oppTrainerPos() { return this.oppTrainer ? this.oppTrainer.position : null; }
+
+  /**
+   * #3 Raycast the crosshair against the enemy monster + enemy trainer. Returns
+   * 'monster' | 'trainer' | null and highlights the hovered target with a
+   * reticle outline (red = monster, orange = trainer).
+   */
+  reticleTarget(camera) {
+    this._reticleRay ??= new THREE.Raycaster();
+    this._reticleRay.setFromCamera({ x: 0, y: 0 }, camera);
+    // enemy = the 'b' side monster + the opponent trainer mesh
+    const monMeshes = []; this.bView.mesh.traverse((o) => { if (o.isMesh) monMeshes.push(o); });
+    const trnMeshes = []; this.oppTrainer?.traverse((o) => { if (o.isMesh) trnMeshes.push(o); });
+    const monHit = this._reticleRay.intersectObjects(monMeshes, false)[0];
+    const trnHit = this._reticleRay.intersectObjects(trnMeshes, false)[0];
+    let target = null;
+    if (monHit && (!trnHit || monHit.distance <= trnHit.distance)) target = 'monster';
+    else if (trnHit) target = 'trainer';
+    this._applyReticleHighlight(target);
+    return target;
+  }
+
+  _applyReticleHighlight(target) {
+    // tint the enemy monster / opponent trainer emissive to confirm the hover
+    const setEmissive = (root, hex) => root?.traverse((o) => { if (o.isMesh && o.material.emissive) o.material.emissive.setHex(hex); });
+    setEmissive(this.bView.mesh, target === 'monster' ? 0x661111 : 0x000000);
+    setEmissive(this.oppTrainer, target === 'trainer' ? 0x663a00 : 0x000000);
+  }
+
   /**
    * Click-to-move raycast: project screen-center (crosshair) onto the sand
    * plane (y=0) and return the {x,z} ground point, clamped inside the arena,
@@ -259,18 +319,25 @@ export class ArenaScene {
       const c = sideView.combatant;
       c.hp = s.hp; c.stamina = s.stamina; c.stance = s.stance;
       c.stunTimer = s.stunned ? Math.max(c.stunTimer, 0.1) : 0;
+      c.getUpTimer = s.gettingUp ? Math.max(c.getUpTimer, 0.1) : (s.stunned ? c.getUpTimer : 0); // #1 sync get-up
       c.confuseTimer = s.confused ? Math.max(c.confuseTimer, 0.1) : 0;
     };
     map(this.aView, snap.a);
     map(this.bView, snap.b);
+    // #2 opponent trainer position + overhead HP from the authoritative snapshot
+    if (this.oppTrainer && snap.b.trainerX != null) {
+      this.oppTrainer.position.set(snap.b.trainerX, 0, snap.b.trainerZ);
+      this.setOppTrainerHp((snap.b.trainerHp ?? 100) / (snap.b.trainerMaxHp ?? 100));
+    }
+    this._snapTrainer = { a: snap.a, b: snap.b }; // for HUD readout
     if (this.physics) {
       this.physics.setPosition('a', snap.a.x, 1.0, snap.a.z);
       this.physics.setPosition('b', snap.b.x, 1.0, snap.b.z);
     }
-    // surface miss reactions the host decided
+    // surface events the host decided
     for (const ev of snap.events || []) {
       if (ev.type === 'miss') this.playReaction(ev.caster, ev.reaction);
-      if (ev.type === 'hit') this.flashHit(ev.target);
+      if (ev.type === 'hit' || ev.type === 'trainerHit') this.flashHit(ev.target === 'a' || ev.target === 'b' ? ev.target : 'b');
     }
   }
 
@@ -320,8 +387,10 @@ export class ArenaScene {
 
   _stepMonster(self, foe, dt, events, tag) {
     const c = self.combatant;
-    // stun → tilt the mesh like a ragdoll, no movement
-    if (c.isStunned) { self.mesh.rotation.z = Math.sin(performance.now() * 0.02) * 0.5; return; }
+    // stun → tilt the mesh like a ragdoll, no movement. Get-up also locks
+    // movement (handled visually in _animate), so bail out of steering here too.
+    if (c.isStunned) { self.mesh.rotation.z = Math.sin(performance.now() * 0.02) * 0.5; self._moving = false; return; }
+    if (c.isGettingUp) { self._moving = false; return; }
     self.mesh.rotation.z *= 0.8;
 
     // Click-to-move order (LMB): walk to the point, overriding stance, until
@@ -359,7 +428,12 @@ export class ArenaScene {
       return;
     }
 
-    const toFoe = new THREE.Vector3().subVectors(foe.pos, self.pos);
+    // #3 Offensive pursuit target: the enemy monster, or the enemy trainer if
+    // the trainer issued a trainer-attack command. Only side 'a' can target the
+    // (visible) opponent trainer; side 'b' always targets the player monster.
+    const trainerTarget = (c.stance === STANCES.OFFENSIVE && c.attackTarget === 'trainer' && tag === 'a' && this.oppTrainerPos);
+    const targetPos = trainerTarget ? this.oppTrainerPos : foe.pos;
+    const toFoe = new THREE.Vector3().subVectors(targetPos, self.pos); toFoe.y = 0;
     const dist = toFoe.length();
     toFoe.normalize();
     const speed = c.effectiveSpeed;
@@ -372,7 +446,7 @@ export class ArenaScene {
         self._basicTimer -= dt;
         if (self._basicTimer <= 0) {
           self._basicTimer = 1.2;
-          if (c.stamina >= 8) { c.spendStamina(8); events.push({ attacker: tag }); }
+          if (c.stamina >= 8) { c.spendStamina(8); events.push({ attacker: tag, vsTrainer: !!trainerTarget }); }
         }
       }
     } else if (c.stance === STANCES.DEFENSIVE) {
@@ -411,21 +485,34 @@ export class ArenaScene {
     if (!this.physics) return;
     for (const [key, v] of [['a', this.aView], ['b', this.bView]]) {
       const c = v.combatant;
-      // stun → ragdoll transition
+
+      // #1 Recovery state machine: RAGDOLL (stunned) → GET_UP (upright, locked,
+      // realigned to ground, playing the get-up anim) → ACTIVE.
       if (c.isStunned && !v._ragdolling) {
-        v._ragdolling = true;
+        // enter ragdoll tumble
+        v._ragdolling = true; v._gettingUp = false;
         const foe = key === 'a' ? this.bView : this.aView;
         const away = { x: v.pos.x - foe.pos.x, z: v.pos.z - foe.pos.z };
         const len = Math.hypot(away.x, away.z) || 1;
         this.physics.ragdoll(key, { x: away.x / len, z: away.z / len });
       } else if (!c.isStunned && v._ragdolling) {
-        v._ragdolling = false;
-        this.physics.standUp(key);
+        // stun ended → stand the body up (kinematic realign) and begin GET_UP.
+        v._ragdolling = false; v._gettingUp = true;
+        this.physics.standUp(key);               // re-lock upright + zero spin
+        v._physRot = null;                        // stop driving mesh from tumble quaternion
+      } else if (v._gettingUp && !c.isGettingUp) {
+        // get-up animation finished → fully active again
+        v._gettingUp = false;
       }
+
+      // Keep the body planted (no outward velocity) during get-up so it can't
+      // slide while the animation plays.
+      if (v._gettingUp) this.physics.setDesiredVelocity(key, 0, 0);
+
       const t = this.physics.getTransform(key);
       if (t) {
         v.pos.set(t.pos.x, 0, t.pos.z);
-        v._physRot = t.rot; // quaternion while ragdolling
+        if (v._ragdolling) v._physRot = t.rot;   // only read tumble rotation while ragdolling
       }
     }
   }
@@ -468,7 +555,23 @@ export class ArenaScene {
         continue;
       }
 
+      const yBaseEarly = c.def.silhouette === 'raptor_hover' ? 0.3 : 0;
+      // #1 Get-Up animation: smoothly rise from flat (on the ground) back to
+      // upright over the get-up duration. Movement is locked (effectiveSpeed=0)
+      // so this can't slide. Uses quaternion slerp from a prone tilt → upright.
+      if (c.isGettingUp) {
+        const p = 1 - (c.getUpTimer / 1.0); // 0 (just stood up) → 1 (fully up)
+        const base = v.baseScale ?? 1;
+        const proneTilt = new THREE.Euler(Math.PI / 2 * (1 - p), v.facing, 0, 'YXZ');
+        v.mesh.quaternion.setFromEuler(proneTilt);
+        v.mesh.position.set(v.pos.x, yBaseEarly + p * 0.0, v.pos.z);
+        v.mesh.scale.set(base, base, base);
+        continue;
+      }
+
       if (!this.physics) this._clampToArena(v); // fallback boundary (physics walls handle it otherwise)
+      // reset any leftover quaternion from ragdoll/get-up back to Euler control
+      v.mesh.quaternion.set(0, 0, 0, 1);
       const yBase = c.def.silhouette === 'raptor_hover' ? 0.3 : 0;
 
       // #4 Locomotion juice: squash-and-stretch bob + side roll while moving.
@@ -566,6 +669,7 @@ export class ArenaScene {
   _animateCrowdAndTrainers(dt) {
     this._t = (this._t ?? 0) + dt;
     const t = this._t;
+    if (this._camera) this._billboardBars(this._camera); // #2 overhead HP bar faces camera
     if (this._crowdHeads) {
       for (const h of this._crowdHeads) {
         h.position.y = h.userData.baseY + Math.abs(Math.sin(t * 3 + h.userData.phase)) * 0.18;

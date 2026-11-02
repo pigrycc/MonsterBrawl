@@ -84,6 +84,12 @@ class SfxEngine {
 
   /** Taking damage — duller, lower (#7). */
   hurt() { this._tone({ type: 'triangle', freq: 150, freqEnd: 70, dur: 0.14, gain: 0.28 }); }
+
+  /** #6 Footstep — a short crunchy gravel/sand noise burst with a soft thud. */
+  footstep() {
+    this._noise({ dur: 0.06, gain: 0.18, lowpass: 2600 });
+    this._tone({ type: 'sine', freq: 90, freqEnd: 55, dur: 0.05, gain: 0.08 });
+  }
 }
 
 export const SFX = new SfxEngine();

@@ -86,6 +86,14 @@ export class ArenaHud {
     this.netStatus = document.createElement('div');
     this.netStatus.style.cssText = 'position:fixed;top:12px;right:14px;z-index:26;font:12px ui-monospace,monospace;color:#7fd38b;background:rgba(14,18,28,.7);border:1px solid #2b3448;border-radius:6px;padding:4px 10px;display:none;';
     document.body.appendChild(this.netStatus);
+
+    // #2 Local trainer HP bar (bottom-left, by the book).
+    this.trainerHp = document.createElement('div');
+    this.trainerHp.style.cssText = 'position:fixed;left:16px;bottom:52px;z-index:25;width:200px;font:12px system-ui,sans-serif;color:#e8ecf3;';
+    this.trainerHp.innerHTML = `<div style="margin-bottom:3px">🧍 Trainer</div>
+      <div style="height:12px;background:#1a2233;border:1px solid #2b3448;border-radius:6px;overflow:hidden">
+        <i data-thp style="display:block;height:100%;width:100%;background:linear-gradient(90deg,#39d98a,#8fe)"></i></div>`;
+    document.body.appendChild(this.trainerHp);
     this.count = document.createElement('div');
     this.count.className = 'mcb-count';
     this.end = document.createElement('div');
@@ -139,6 +147,13 @@ export class ArenaHud {
     this.end.style.display = 'flex';
   }
 
+  /** #2 Update the local trainer HP bar (0..1). */
+  setTrainerHp(frac) {
+    const bar = this.trainerHp.querySelector('[data-thp]');
+    bar.style.width = `${Math.max(0, frac) * 100}%`;
+    bar.style.background = frac > 0.3 ? 'linear-gradient(90deg,#39d98a,#8fe)' : 'linear-gradient(90deg,#ef4444,#f59e0b)';
+  }
+
   /** #4 Show/update the net status (ping ms). Call with null to hide. */
   setNetStatus(pingMs) {
     if (pingMs == null) { this.netStatus.style.display = 'none'; return; }
@@ -148,5 +163,5 @@ export class ArenaHud {
     this.netStatus.textContent = `NET ${pingMs}ms`;
   }
 
-  dispose() { [this.bars, this.clock, this.skillsEl, this.stanceKeys, this.count, this.end, this.netStatus].forEach((e) => e.remove()); }
+  dispose() { [this.bars, this.clock, this.skillsEl, this.stanceKeys, this.count, this.end, this.netStatus, this.trainerHp].forEach((e) => e.remove()); }
 }

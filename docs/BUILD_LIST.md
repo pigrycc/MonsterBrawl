@@ -186,3 +186,21 @@ Legend: ✅ Done · 🟡 Partial · ❌ Missing · 🚫 Needs native CI runner (
 - Voice signaling relays through the host; code is defensive (no-ops without getUserMedia/RTCPeerConnection) but its runtime behavior is unverified by me.
 - Spectator-thrown items are not yet authoritative (the §6 crowd auto-throw still drives arena throwables); manual spectator throwing is a follow-up.
 - Combat sync has no client-side prediction — high ping will feel like input lag.
+
+---
+
+## Feedback round 5
+| Item | Status |
+|---|---|
+| #1 Ragdoll→Get-Up→Active recovery (no prone sliding) | ✅ explicit get-up state locks movement; verified slide=0 during get-up |
+| #2 Trainer HP — FPP HUD bar + overhead world-space bars | ✅ |
+| #2 Damage rules: trainers can't hurt each other; monsters can hit trainers | ✅ (TrainerState, source-gated) |
+| #3 Reticle-targeted Offensive `[Q]` (monster vs trainer) + red/orange highlight | ✅ |
+| #4 AI trainer reaction delay (~3s, debug-tunable) → kite + retaliate | ✅ |
+| #5 Aggro interception (bodyguard): monster contact breaks trainer-chase | ✅ |
+| #6 Footstep SFX (cadence scales with velocity) | ✅ logic / ⚠️ sound UNVERIFIED (no audio device) |
+
+### Notes
+- "NavMeshAgent pause" mapped to our steering/velocity pause (no nav-mesh engine).
+- #4/#5 run in the authoritative runner (networked) and the single-player scene.
+- Footstep *trigger cadence* is unit-tested; the audio itself needs a real device.

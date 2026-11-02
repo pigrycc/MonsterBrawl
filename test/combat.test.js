@@ -200,3 +200,28 @@ test('Skill Cooldown multiplier scales cooldown duration (#8)', () => {
   assert.ok(Math.abs(c.cooldowns.get(1) - baseCd * 5) < 1e-6);
   fresh();
 });
+
+// --- #1 Ragdoll → Get-Up → Active recovery state machine ---------------------
+
+test('stun transitions into a get-up phase that keeps movement locked (#1)', () => {
+  fresh();
+  const c = new MonsterCombatant({ playerId: 'p', monsterId: 'voltkid' });
+  c.spendStamina(c.maxStamina);          // → stunned
+  assert.equal(c.isStunned, true);
+  assert.equal(c.isIncapacitated, true);
+  assert.equal(c.effectiveSpeed, 0, 'no movement while stunned');
+
+  // run out the stun; it should hand off to GET_UP, not straight to active
+  c.update(STUN_DURATION + 0.01);
+  assert.equal(c.isStunned, false);
+  assert.equal(c.isGettingUp, true, 'entered get-up after stun');
+  assert.equal(c.isIncapacitated, true, 'still locked during get-up');
+  assert.equal(c.effectiveSpeed, 0, 'no movement/sliding during get-up');
+  assert.equal(c.canCast(c.skillIds[0] ?? 1), false, 'cannot act during get-up');
+
+  // finish the get-up animation → fully active
+  c.update(1.01);
+  assert.equal(c.isGettingUp, false);
+  assert.equal(c.isIncapacitated, false);
+  assert.ok(c.effectiveSpeed > 0, 'moves again once get-up completes');
+});
