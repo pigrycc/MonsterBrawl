@@ -99,6 +99,21 @@ export class PrepPhase {
     this.renderer.render(this.scene3d.scene, this.camera);
   }
 
+  /** Debug/QA: make every fighter READY (cheapest-first) so prep completes. */
+  debugForceReady() {
+    for (const cell of this.session.cells.values()) {
+      while (!cell.isReady) {
+        let best = -1, bc = Infinity;
+        cell.totems.forEach((t, i) => { if (cell.canPurchase(i) && t.skill.cost < bc) { best = i; bc = t.skill.cost; } });
+        if (best < 0) break;
+        cell.purchase(best);
+      }
+    }
+    this.hud.setGold(this.cell.gold);
+    this.hud.renderSlots(this.cell.loadout());
+    this.hud.setReady(this.cell.isReady);
+  }
+
   /** Debug/QA: purchase totem i directly (bypasses aim+hold). Returns slot. */
   debugBuy(i) {
     if (!this.cell.canPurchase(i)) return -1;

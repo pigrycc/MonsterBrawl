@@ -71,18 +71,21 @@ Legend: ✅ Done · 🟡 Partial · ❌ Missing · 🚫 Needs native CI runner (
 ## §5 Arena Combat (FPP)
 | Item | Status |
 |---|---|
-| Spawn + 3·2·1·GO lock | ❌ |
-| 3:00 clock | ❌ |
-| Sudden Death | ❌ |
-| Stances `[Q]/[E]/[F]` + 2s delay | ❌ |
-| NavMesh monster nav | ❌ |
-| Stamina (slow <50%, 0=3s stun) | ❌ |
-| Rest regen (+1/2s vs +1/4s) | ❌ |
-| Skills `[1]–[4]` + windup + HUD cd | ❌ |
-| Shove `LMB` 4m, 10s/target | ❌ |
-| Trainer crossfire ragdoll | ❌ |
-| Crowd drops + `[E]` carry | ❌ |
-| Rewards +30/+20 | ✅ (data) / ❌ (flow) |
+| Spawn on sand + 3·2·1·GO! lock (look-only) | ✅ |
+| 3:00 match clock | ✅ |
+| Sudden Death (next damage ends match) | ✅ |
+| Stances `[Q]/[E]/[F]` + 2.0s behavioral delay | ✅ |
+| Defensive: −50% skill dmg + negate 1 basic | ✅ |
+| Monster autonomous nav (stance-driven steering; NavMesh-lite flat arena) | ✅ / 🟡 (true NavMesh deferred) |
+| Stamina (slow <50% → 0.7x, 0 → 3s ragdoll stun) | ✅ |
+| Rest regen (+1/2s neutral vs +1/4s combat) | ✅ |
+| Skills `[1]–[4]` + wind-up + HUD cooldown clocks | ✅ |
+| Shove `LMB` (4m, 10s cooldown) | ✅ |
+| Crowd drops (potion/adrenaline/oil) + `[E]` carry/deliver | ✅ |
+| Trainer crossfire ragdoll | 🟡 (shove/drops done; crossfire knockback deferred) |
+| Rewards +30/+20 (applied to wallet) | ✅ |
+| Bot opponent (minimal, playable) | ✅ (full §8 profiles later) |
+| Verified: headless render — full lobby→prep→arena→KO→VICTORY flow | ✅ |
 
 ## §6 Spectator Interaction
 | Item | Status |

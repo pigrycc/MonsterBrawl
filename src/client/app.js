@@ -13,6 +13,8 @@ import { HostConsole } from './ui/hostConsole.js';
 import { LobbyScene } from './lobby/lobbyScene.js';
 import { LocalState } from './state/localState.js';
 import { PrepPhase } from './prep/prepPhase.js';
+import { ArenaPhase } from './arena/arenaPhase.js';
+import { freeSkills } from '../shared/skills.js';
 
 export class GameApp {
   constructor(mountEl) {
@@ -76,6 +78,7 @@ export class GameApp {
 
   // --- PREP -----------------------------------------------------------------
   enterPrep(fighters) {
+    this._fighters = fighters; // remember monster ids for the arena transition
     const prep = new PrepPhase({
       renderer: this.renderer,
       input: this.input,
@@ -88,14 +91,46 @@ export class GameApp {
     // without needing pointer-lock aiming).
     window.mcbDebug.buyTotem = (i) => prep.debugBuy(i);
     window.mcbDebug.cell = () => prep.cell;
+    window.mcbDebug.forceReady = () => prep.debugForceReady();
   }
 
   onPrepComplete(result) {
-    console.log('[MCB] prep complete — local loadout skill ids:', result.localLoadout);
-    // TODO(arena-slice): enter FPP arena combat (GDD §5).
-    // For now, bounce back to the lobby with a summary toast.
+    console.log('[MCB] prep complete — loadouts:', result.loadoutByPlayer);
+    // Combine remembered monster ids with each fighter's drafted loadout, then
+    // enter the arena. A fighter who drafted nothing (e.g. a passive bot) gets
+    // a fallback of 4 free basic skills so the bout is always valid.
+    const fallback = freeSkills().slice(0, 4).map((s) => s.id);
+    const arenaFighters = this._fighters.map((f) => ({
+      playerId: f.playerId,
+      monsterId: f.monsterId,
+      skillIds: (result.loadoutByPlayer?.[f.playerId]?.length ? result.loadoutByPlayer[f.playerId] : fallback),
+      isBot: f.playerId !== LocalState.get().localPlayerId,
+    }));
+    this.enterArena(arenaFighters);
+  }
+
+  // --- ARENA ----------------------------------------------------------------
+  enterArena(fighters) {
+    const arena = new ArenaPhase({
+      renderer: this.renderer,
+      input: this.input,
+      localPlayerId: LocalState.get().localPlayerId,
+      fighters,
+      onComplete: (result) => this.onArenaComplete(result),
+    });
+    this._swap(arena, 'ARENA');
+    window.mcbDebug.arena = () => arena;
+    window.mcbDebug.match = () => arena.match;
+  }
+
+  onArenaComplete(result) {
+    const st = LocalState.get();
+    const won = result.winnerPlayerId === st.localPlayerId;
+    const reward = won ? result.winReward : result.loseReward;
+    LocalState.setGold(st.gold + reward);
+    console.log(`[MCB] arena complete — ${won ? 'WON' : 'LOST'} +${reward}g (reason: ${result.reason})`);
     this.enterLobby();
-    this.phase?.toast?.(`Prep done! Loadout locked (${result.localLoadout.length} skills). Arena coming in the next slice.`);
+    this.phase?.toast?.(`${won ? 'Victory' : 'Defeat'}! +${reward} gold. (Total: ${LocalState.get().gold}g)`);
   }
 
   _loop() {
