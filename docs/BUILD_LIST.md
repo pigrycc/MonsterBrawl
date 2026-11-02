@@ -54,15 +54,19 @@ Legend: ✅ Done · 🟡 Partial · ❌ Missing · 🚫 Needs native CI runner (
 ## §4 Preparation Phase
 | Item | Status |
 |---|---|
-| Two synced rooms + 60s timer (skip-when-ready) | ❌ |
-| 6 affinity-weighted totems | ✅ (logic) / ❌ (3D) |
-| World tooltip | ❌ |
-| Hold `[E]` 1s buy → slot `[1]–[4]` | ❌ |
-| READY at 4 skills | ❌ |
-| Economy 50g / 0-10-20-30 | ✅ (data) / ❌ (flow) |
-| ≥4 affordable guarantee | ✅ |
-| Skills reset each bout | ❌ |
-| Bookmaker: 3 bets, 1 wager, 2.0x, max 10g | ❌ |
+| Synchronized 60s countdown (debug-configurable) | ✅ |
+| Skip-to-zero when all fighters READY | ✅ |
+| 6 affinity-weighted totems (3D stone totems w/ runes) | ✅ |
+| World-space 3D tooltip (name/cost/cd/windup/effect/element/slapstick) | ✅ |
+| Hold `[E]` 1s buy → slot `[1]–[4]` (+ progress ring) | ✅ |
+| READY at 4 skills (banner) | ✅ |
+| Economy 50g / 0-10-20-30 | ✅ |
+| **STRONG** anti-softlock: 4 cheapest totems collectively affordable | ✅ |
+| Skills reset each bout (`resetForNewBout`) | ✅ |
+| Bookmaker: 3 bets, 1 wager, 2.0x, max 10g | ✅ logic+UI / 🟡 wiring (needs spectators from networking) |
+| Lobby→Prep phase transition (GameApp state machine) | ✅ |
+| Verified: headless render — transition, HUD, timer, buy→slot→READY | ✅ |
+| Spectator Bookmaker's Den 3D scene | 🟡 (UI built; 3D den deferred) |
 
 ## §5 Arena Combat (FPP)
 | Item | Status |

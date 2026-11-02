@@ -71,6 +71,20 @@ test('totem draft with 0 gold still guarantees 4 affordable (free) skills', () =
   }
 });
 
+test('STRONG anti-softlock: the 4 cheapest totems are COLLECTIVELY affordable', () => {
+  // Guards against a player being stranded below 4 skills even when buying
+  // cheapest-first: sum of the 4 cheapest offered totems must be <= gold.
+  for (const id of ['pyroroc', 'aquaslug', 'voltkid', 'terrataur', 'galebird']) {
+    const monster = getMonster(id);
+    for (let seed = 1; seed <= 500; seed++) {
+      const totems = generateTotemDraft({ monster, gold: 50, rng: makeRng(seed) });
+      const costs = totems.map((t) => t.cost).sort((a, b) => a - b);
+      const sum4 = costs.slice(0, 4).reduce((s, x) => s + x, 0);
+      assert.ok(sum4 <= 50, `${id} seed ${seed}: 4 cheapest sum ${sum4} > 50`);
+    }
+  }
+});
+
 test('totem draft is affinity-weighted', () => {
   const monster = getMonster('terrataur'); // Earth
   let earthCount = 0;

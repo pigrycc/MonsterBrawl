@@ -76,13 +76,36 @@ export function generateTotemDraft({ monster, gold, allFree = false, rng = makeR
     return pick;
   };
 
-  // Step 1: satisfy the anti-softlock guarantee first.
+  // Step 1: STRONG anti-softlock guarantee — the 4 "safety" totems must be
+  // COLLECTIVELY affordable within `gold`, not merely individually. Otherwise a
+  // player buying cheapest-first could still be stranded below 4 skills.
+  // We pick 4 skills affinity-weighted while keeping a running budget; if a
+  // weighted pick would bust the remaining budget, we fall back to the cheapest
+  // available skill (there are always enough 0-gold skills to complete a set).
+  let budget = effectiveGold;
+  const freePool = () => SKILLS.filter((s) => s.cost === 0 && !used.has(s.id));
+  const takeWithin = (remaining) => {
+    const avail = affordablePool.filter((s) => !used.has(s.id) && s.cost <= remaining);
+    if (avail.length === 0) return null;
+    const pick = weightedPick(avail, weightOf, rng);
+    used.add(pick.id);
+    chosen.push(pick);
+    return pick;
+  };
   const needAffordable = Math.min(MIN_AFFORDABLE, affordablePool.length);
-  for (let i = 0; i < needAffordable; i++) take(affordablePool);
+  for (let i = 0; i < needAffordable; i++) {
+    const picked = takeWithin(budget) || (() => {
+      // fall back to cheapest free skill to stay solvent
+      const free = freePool().sort((a, b) => a.cost - b.cost)[0];
+      if (!free) return null;
+      used.add(free.id); chosen.push(free); return free;
+    })();
+    if (!picked) break;
+    budget -= picked.cost;
+  }
 
-  // Step 2: fill remaining slots from the full pool (affordable first bias via
-  // affinity weighting applies to everything). Prefer affordable, then allow
-  // pricey "aspirational" skills to round out the 6.
+  // Step 2: fill remaining slots from the full pool. Prefer affordable, then
+  // allow pricey "aspirational" skills to round out the 6.
   while (chosen.length < TOTEM_COUNT) {
     const picked = take(affordablePool) || take(unaffordablePool);
     if (!picked) break; // pools exhausted (only in tiny test DBs)
