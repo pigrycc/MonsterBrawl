@@ -39,10 +39,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        # Linux intentionally dropped — Windows + macOS only (per request).
         include:
-          - os: ubuntu-latest
-            target: dist:linux
-            artifact: linux-zip
           - os: windows-latest
             target: dist:win
             artifact: windows-zip

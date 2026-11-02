@@ -1,6 +1,6 @@
 {
   "name": "monster-coliseum-brawl",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Monster Coliseum Brawl — a 3D multiplayer monster-battling prototype (Three.js + Electron + authoritative Node host).",
   "author": "Monster Coliseum Brawl Team",
   "license": "MIT",
