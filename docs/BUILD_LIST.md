@@ -129,3 +129,17 @@ Legend: ✅ Done · 🟡 Partial · ❌ Missing · 🚫 Needs native CI runner (
 | Verified: headless render — opens, 12 rows, flip persists, override works | ✅ |
 
 ## §10 50-Skill DB | ✅ (loaded, corrected, tested)
+
+---
+
+## Feedback round 1 (playtest polish)
+| # | Item | Status |
+|---|---|---|
+| 1 | Auto pointer-lock on scene entry (no preliminary click) | ✅ (click fallback retained) |
+| 2 | Stance: instant switch + 2s cooldown *after* (was 2s pre-delay) | ✅ (overrides GDD §5B wording per feedback) |
+| 3 | FPP pointing-hand gesture on skill cast | ✅ (viewmodel arm, eases out) |
+| 4 | Monster locomotion juice (squash/bob + roll) | ✅ |
+| 5 | Grander arena (r 13→22) + crowd (448 heads) + visible opponent trainer | ✅ |
+| 6 | Out-of-bounds fail-safe (per-frame clamp to arena) | ✅ (no physics engine; clamp substitutes for CCD) |
+| 7 | Audio SFX — UI clicks + combat impacts (synthesized WebAudio) | ✅ code / ⚠️ UNVERIFIED (no audio device in sandbox) |
+| 8 | Debug multipliers: Skill Cooldown × and Monster HP × (1x–6x) | ✅ (wired + unit-tested) |

@@ -27,10 +27,29 @@ export class FppController {
     this.pitch = 0;
     this.position = new THREE.Vector3(opts.x ?? 0, this.eyeHeight, opts.z ?? 6);
 
-    this._onClick = () => { if (this.enabled) this.dom.requestPointerLock?.(); };
+    this._onClick = () => { if (this.enabled) this.requestLock(); };
     this._onLockChange = () => { this.locked = document.pointerLockElement === this.dom; };
     this.dom.addEventListener('click', this._onClick);
     document.addEventListener('pointerlockchange', this._onLockChange);
+
+    // #1 feedback: auto-capture the mouse on scene entry so mouse-look is
+    // active immediately (no preliminary click). Pointer lock requires a prior
+    // user gesture; scene transitions come from a click (START MATCH / menu),
+    // so this request is honored. If the browser rejects it (no recent
+    // gesture), the click handler is still the fallback.
+    if (opts.autoLock !== false) this.requestLock();
+  }
+
+  /** Request pointer lock (mouse capture) if not already locked. */
+  requestLock() {
+    if (this.locked) return;
+    // requestPointerLock may reject (no user gesture, or an invalid document in
+    // headless harnesses). It can return a promise (newer browsers) or throw;
+    // swallow both quietly — the click handler is the guaranteed fallback.
+    try {
+      const p = this.dom.requestPointerLock?.();
+      if (p && typeof p.catch === 'function') p.catch(() => {});
+    } catch { /* needs a user gesture */ }
   }
 
   setEnabled(v) { this.enabled = v; if (!v && this.locked) document.exitPointerLock?.(); }

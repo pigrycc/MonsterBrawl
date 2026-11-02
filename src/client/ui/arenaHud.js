@@ -101,9 +101,10 @@ export class ArenaHud {
   }
 
   _stance(el, c) {
-    const pending = c.stanceDelayRemaining > 0 ? ` → ${c.pendingStance} (${c.stanceDelayRemaining.toFixed(1)}s)` : '';
+    const cd = c.stanceCooldownRemaining > 0 ? ` (switch in ${c.stanceCooldownRemaining.toFixed(1)}s)` : '';
     const stun = c.isStunned ? ' · STUNNED' : '';
-    el.textContent = `${c.stance}${pending}${stun}`;
+    const conf = c.isConfused ? ' · CONFUSED' : '';
+    el.textContent = `${c.stance}${cd}${stun}${conf}`;
   }
 
   setClock(seconds, suddenDeath) {

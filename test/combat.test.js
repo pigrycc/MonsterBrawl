@@ -9,7 +9,7 @@ import assert from 'node:assert/strict';
 import { DebugConfig } from '../src/shared/debugConfig.js';
 import {
   MonsterCombatant, CombatMatch, STANCES, MATCH_STATE,
-  STANCE_DELAY, STUN_DURATION, LOW_STAMINA_SLOW, DEFENSIVE_SKILL_MULT,
+  STANCE_COOLDOWN, STUN_DURATION, LOW_STAMINA_SLOW, DEFENSIVE_SKILL_MULT,
 } from '../src/shared/combat.js';
 import { getSkillById } from '../src/shared/skills.js';
 
@@ -24,23 +24,25 @@ test('combatant initializes from monster def', () => {
   assert.equal(c.alive, true);
 });
 
-test('stance change applies only after the 2.0s behavioral delay (GDD §5B)', () => {
+test('stance switches INSTANTLY, then locks out for the cooldown (#2)', () => {
   fresh();
   const c = new MonsterCombatant({ playerId: 'p', monsterId: 'voltkid' });
-  c.commandStance(STANCES.OFFENSIVE);
-  assert.equal(c.stance, STANCES.NEUTRAL, 'not applied immediately');
-  assert.ok(Math.abs(c.stanceDelayRemaining - STANCE_DELAY) < 1e-6);
-  c.update(1.0); assert.equal(c.stance, STANCES.NEUTRAL);
-  c.update(1.0); // total 2.0s
-  assert.equal(c.stance, STANCES.OFFENSIVE, 'applied after 2s');
-  assert.equal(c.stanceDelayRemaining, 0);
+  assert.equal(c.commandStance(STANCES.OFFENSIVE), true);
+  assert.equal(c.stance, STANCES.OFFENSIVE, 'applied immediately');
+  assert.ok(Math.abs(c.stanceCooldownRemaining - STANCE_COOLDOWN) < 1e-6);
+  // cannot switch again while on cooldown
+  assert.equal(c.commandStance(STANCES.DEFENSIVE), false, 'blocked during cooldown');
+  assert.equal(c.stance, STANCES.OFFENSIVE);
+  c.update(STANCE_COOLDOWN + 0.01);
+  assert.equal(c.stanceCooldownRemaining, 0);
+  assert.equal(c.commandStance(STANCES.DEFENSIVE), true, 'switchable after cooldown');
+  assert.equal(c.stance, STANCES.DEFENSIVE);
 });
 
 test('defensive stance grants one basic-attack negation charge', () => {
   fresh();
   const c = new MonsterCombatant({ playerId: 'p', monsterId: 'pyroroc' });
   c.commandStance(STANCES.DEFENSIVE);
-  c.update(STANCE_DELAY);
   assert.equal(c.stance, STANCES.DEFENSIVE);
   assert.equal(c.guardBasicCharges, 1);
   // First basic fully negated
@@ -54,8 +56,7 @@ test('defensive stance grants one basic-attack negation charge', () => {
 test('defensive stance halves skill damage (GDD §5B)', () => {
   fresh();
   const c = new MonsterCombatant({ playerId: 'p', monsterId: 'terrataur' });
-  c.commandStance(STANCES.DEFENSIVE);
-  c.update(STANCE_DELAY);
+  c.commandStance(STANCES.DEFENSIVE); // instant now
   const dealt = c.takeDamage(40, { isBasic: false });
   assert.equal(dealt, Math.round(40 * DEFENSIVE_SKILL_MULT));
   assert.equal(dealt, 20);
@@ -87,7 +88,7 @@ test('rest/neutral regenerates stamina twice as fast as combat stances', () => {
   const neutral = new MonsterCombatant({ playerId: 'n', monsterId: 'pyroroc' });
   const off = new MonsterCombatant({ playerId: 'o', monsterId: 'pyroroc' });
   neutral.spendStamina(50); off.spendStamina(50);
-  off.commandStance(STANCES.OFFENSIVE); off.update(STANCE_DELAY);
+  off.commandStance(STANCES.OFFENSIVE); // instant
   const s0n = neutral.stamina, s0o = off.stamina;
   neutral.update(4); off.update(4);
   const gainN = neutral.stamina - s0n;
@@ -175,4 +176,27 @@ test('bout duration + stun counts are reported for betting resolution', () => {
   m.dealDamage(b, b.maxHp);
   assert.ok(result.boutDurationSec >= 12);
   assert.equal(result.stunCountsByMonsterId['voltkid'], 1);
+});
+
+// --- Feedback round 1 (#8): debug multipliers --------------------------------
+
+test('Monster HP multiplier scales max + current HP (#8)', () => {
+  fresh();
+  const base = new MonsterCombatant({ playerId: 'p', monsterId: 'terrataur' });
+  assert.equal(base.maxHp, 180);
+  DebugConfig.set('monsterHpMultiplier', '3x');
+  const buffed = new MonsterCombatant({ playerId: 'p', monsterId: 'terrataur' });
+  assert.equal(buffed.maxHp, 540);
+  assert.equal(buffed.hp, 540);
+  fresh();
+});
+
+test('Skill Cooldown multiplier scales cooldown duration (#8)', () => {
+  fresh();
+  const c = new MonsterCombatant({ playerId: 'p', monsterId: 'pyroroc', skillIds: [1] });
+  const baseCd = getSkillById(1).cooldown; // 4.0
+  DebugConfig.set('skillCooldownMultiplier', '5x');
+  c.startCooldown(1);
+  assert.ok(Math.abs(c.cooldowns.get(1) - baseCd * 5) < 1e-6);
+  fresh();
 });

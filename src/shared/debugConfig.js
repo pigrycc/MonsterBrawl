@@ -43,6 +43,9 @@ define({ key: 'spectatorItemSpawnRate', label: 'Spectator Item Spawn (s)', type:
 define({ key: 'arenaItemSpawnRate', label: 'Arena Item Spawn (s)', type: 'float', default: 15.0, min: 1, max: 120, help: 'Spawn timer for arena crowd drops.' });
 define({ key: 'botBehaviorMode', label: 'Bot Behavior', type: 'enum', default: 'HUMANLIKE', options: ['IDLE', 'HUMANLIKE'], help: 'Default profile for spawned bots.' });
 define({ key: 'forceLocalMonsterType', label: 'Force Local Monster', type: 'enum', default: 'NONE', options: ['NONE', 'Pyroroc', 'Aquaslug', 'Voltkid', 'Terrataur', 'Galebird'], help: 'Override local trainer monster selection.' });
+// Feedback round 1 (#8): tuning multipliers.
+define({ key: 'skillCooldownMultiplier', label: 'Skill Cooldown ×', type: 'enum', default: '1x', options: ['1x', '2x', '3x', '4x', '5x', '6x'], help: 'Scales all active skill cooldowns.' });
+define({ key: 'monsterHpMultiplier', label: 'Monster HP ×', type: 'enum', default: '1x', options: ['1x', '2x', '3x', '4x', '5x', '6x'], help: 'Scales monster max (and proportional current) HP.' });
 
 /** Change listeners for hot-reload propagation. @type {Set<Function>} */
 const listeners = new Set();
@@ -93,5 +96,11 @@ export const DebugConfig = {
       if (REGISTRY[k]) REGISTRY[k].value = val;
     }
     for (const fn of listeners) fn('*', null);
+  },
+  /** Parse an "Nx" multiplier enum value to a number (e.g. "3x" → 3). */
+  multiplier(key) {
+    const v = REGISTRY[key]?.value;
+    const n = parseFloat(String(v));
+    return Number.isFinite(n) && n > 0 ? n : 1;
   },
 };

@@ -19,7 +19,9 @@ import { getMonster } from './monsters.js';
 import { getSkillById } from './skills.js';
 
 export const STANCES = { OFFENSIVE: 'OFFENSIVE', DEFENSIVE: 'DEFENSIVE', NEUTRAL: 'NEUTRAL' };
-export const STANCE_DELAY = 2.0;           // GDD §5B behavioral delay
+// Feedback round 1 (#2): stances now switch INSTANTLY; a cooldown starts AFTER
+// the switch to prevent spamming (was previously a 2s pre-switch delay).
+export const STANCE_COOLDOWN = 2.0;        // seconds locked out after a switch
 export const LOW_STAMINA_FRACTION = 0.5;   // below this → slowed
 export const LOW_STAMINA_SLOW = 0.7;       // 30% slower → 0.7x speed
 export const STUN_DURATION = 3.0;          // 0-stamina ragdoll stun
@@ -38,15 +40,16 @@ export class MonsterCombatant {
     this.monsterId = monsterId;
     const def = getMonster(monsterId);
     this.def = def;
-    this.maxHp = def.maxHp;
-    this.hp = def.maxHp;
+    // #8 Monster HP multiplier (debug): scale max + current HP proportionally.
+    const hpMult = DebugConfig.multiplier('monsterHpMultiplier');
+    this.maxHp = Math.round(def.maxHp * hpMult);
+    this.hp = this.maxHp;
     this.maxStamina = def.maxStamina;
     this.stamina = def.maxStamina;
     this.baseSpeed = def.speed;
 
     this.stance = STANCES.NEUTRAL;
-    this.pendingStance = STANCES.NEUTRAL;
-    this._stanceTimer = 0;      // counts down to apply pendingStance
+    this.stanceCooldown = 0;    // >0 → cannot switch yet (post-switch lockout, #2)
 
     this.stunTimer = 0;         // >0 → ragdoll stunned
     this.stunCount = 0;         // for the bookmaker "stunned >=3" bet
@@ -72,15 +75,25 @@ export class MonsterCombatant {
   }
 
   /** Trainer issues a stance change — applied after the 2.0s delay (GDD §5B). */
+  /**
+   * Trainer issues a stance change (#2 feedback): switches INSTANTLY, then
+   * locks out further switches for STANCE_COOLDOWN seconds. Returns true if the
+   * switch happened, false if it was on cooldown or a no-op.
+   */
   commandStance(stance) {
-    if (!Object.values(STANCES).includes(stance)) return;
-    if (stance === this.pendingStance) return;
-    this.pendingStance = stance;
-    this._stanceTimer = STANCE_DELAY;
+    if (!Object.values(STANCES).includes(stance)) return false;
+    if (stance === this.stance) return false;
+    if (this.stanceCooldown > 0) return false; // locked out — prevents spamming
+    this.stance = stance;
+    if (stance === STANCES.DEFENSIVE) this.guardBasicCharges = 1; // negate one basic
+    this.stanceCooldown = STANCE_COOLDOWN;
+    return true;
   }
 
-  /** Seconds remaining before the pending stance takes effect (0 if settled). */
-  get stanceDelayRemaining() { return this.pendingStance !== this.stance ? this._stanceTimer : 0; }
+  /** Seconds until the next stance switch is allowed (0 if ready). */
+  get stanceCooldownRemaining() { return Math.max(0, this.stanceCooldown); }
+  /** Back-compat alias used by HUD: now reports the post-switch lockout. */
+  get stanceDelayRemaining() { return 0; }
 
   spendStamina(n) {
     this.stamina = Math.max(0, this.stamina - n);
@@ -117,16 +130,10 @@ export class MonsterCombatant {
     return dmg;
   }
 
-  /** Per-tick update: stance delay, stun, cooldowns, stamina regen. */
+  /** Per-tick update: stance cooldown, stun, cooldowns, stamina regen. */
   update(dt) {
-    // Stance delay resolution
-    if (this.pendingStance !== this.stance) {
-      this._stanceTimer -= dt;
-      if (this._stanceTimer <= 0) {
-        this.stance = this.pendingStance;
-        if (this.stance === STANCES.DEFENSIVE) this.guardBasicCharges = 1; // negate one basic
-      }
-    }
+    // Stance switch lockout (#2): decays after an instant switch.
+    if (this.stanceCooldown > 0) this.stanceCooldown = Math.max(0, this.stanceCooldown - dt);
     // Stun
     if (this.stunTimer > 0) {
       this.stunTimer = Math.max(0, this.stunTimer - dt);
@@ -148,7 +155,8 @@ export class MonsterCombatant {
 
   startCooldown(skillId) {
     const s = getSkillById(skillId);
-    if (s) this.cooldowns.set(skillId, s.cooldown);
+    // #8 Skill Cooldown multiplier (debug): scale the cooldown duration.
+    if (s) this.cooldowns.set(skillId, s.cooldown * DebugConfig.multiplier('skillCooldownMultiplier'));
   }
 }
 

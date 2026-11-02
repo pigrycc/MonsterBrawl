@@ -21,6 +21,7 @@ import { getSkillById } from '../../shared/skills.js';
 import { DebugConfig } from '../../shared/debugConfig.js';
 import { botChooseStance, botChooseSkill } from '../../shared/bot.js';
 import { THROWABLES, THROWABLE_INFO, applyThrowable, randomThrowable } from '../../shared/throwables.js';
+import { SFX } from '../audio/sfx.js';
 
 const SHOVE_RANGE = 3.5;
 const SHOVE_DISTANCE = 4;
@@ -50,10 +51,11 @@ export class ArenaPhase {
     this.match = new CombatMatch({ a: this.local, b: this.foe, countdown: 3, onEnd: (r) => this._onEnd(r) });
     this.scene3d = new ArenaScene({ a: this.local, b: this.foe });
 
-    this.camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 120);
+    this.camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 160);
     this.controller = new FppController(this.camera, input, renderer.domElement, {
-      x: -5, z: 7, eyeHeight: 1.7, boundaryRadius: this.scene3d.arenaRadius - 1, speed: 5.0,
+      x: -10, z: 12, eyeHeight: 1.7, boundaryRadius: this.scene3d.arenaRadius - 1, speed: 6.0,
     });
+    this._buildViewmodel(); // #3 first-person pointing hand
 
     this.hud = new ArenaHud({
       left: { name: this.local.def.name },
@@ -78,7 +80,11 @@ export class ArenaPhase {
   }
 
   _bindInput() {
-    const stance = (s) => { if (!this.match.locked) { this.local.commandStance(s); this.overlay.showToast(`Stance → ${s} (2s)`, 900); } };
+    const stance = (s) => {
+      if (this.match.locked) return;
+      if (this.local.commandStance(s)) this.overlay.showToast(`Stance → ${s}`, 800);
+      else if (this.local.stanceCooldownRemaining > 0) this.overlay.showToast(`Stance on cooldown (${this.local.stanceCooldownRemaining.toFixed(1)}s)`, 700);
+    };
     this._subs = [
       this.input.onPress('KeyQ', () => stance(STANCES.OFFENSIVE)),
       this.input.onPress('KeyE', () => this._onE()),
@@ -97,9 +103,50 @@ export class ArenaPhase {
     const near = this._nearestDrop();
     if (this._carrying) { this._deliverDrop(); return; }
     if (near && near.d < 1.6) { this._pickupDrop(near.drop); return; }
-    this.local.commandStance(STANCES.DEFENSIVE);
-    this.overlay.showToast('Stance → DEFENSIVE (2s)', 900);
+    if (this.local.commandStance(STANCES.DEFENSIVE)) this.overlay.showToast('Stance → DEFENSIVE', 800);
+    else if (this.local.stanceCooldownRemaining > 0) this.overlay.showToast(`Stance on cooldown (${this.local.stanceCooldownRemaining.toFixed(1)}s)`, 700);
   }
+
+  // #3 First-person pointing viewmodel: a simple arm + pointing hand parented
+  // to the camera, lowered at rest, thrust forward (index finger out) on cast.
+  _buildViewmodel() {
+    const skin = new THREE.MeshStandardMaterial({ color: 0xe0ac86, flatShading: true, roughness: 0.8 });
+    const vm = new THREE.Group();
+    const forearm = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.07, 0.5, 6), skin);
+    forearm.rotation.x = Math.PI / 2; forearm.position.set(0, 0, -0.25);
+    const fist = new THREE.Mesh(new THREE.IcosahedronGeometry(0.1, 0), skin);
+    fist.position.set(0, 0, -0.5);
+    const finger = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.03, 0.22, 5), skin);
+    finger.rotation.x = Math.PI / 2; finger.position.set(0, 0.02, -0.66);
+    vm.add(forearm, fist, finger);
+    // Rest pose: lowered to the bottom-right of the view, tucked back.
+    vm.position.set(0.35, -0.42, -0.5);
+    vm.rotation.set(0.5, 0, 0);
+    this.camera.add(vm);
+    // Ensure the camera (hence the viewmodel) is in the rendered scene graph.
+    this.scene3d.scene.add(this.camera);
+    this.viewmodel = vm;
+    this._vmRest = { pos: vm.position.clone(), rot: vm.rotation.clone() };
+    this._vmPoint = 0; // 0..1 gesture progress
+  }
+
+  _triggerPointGesture() { this._vmPoint = 1; } // decays over time in update()
+
+  _updateViewmodel(dt) {
+    if (!this.viewmodel) return;
+    this._vmPoint = Math.max(0, this._vmPoint - dt * 3.5); // ~0.3s return
+    const p = this._easeOutBack(this._vmPoint);
+    const rest = this._vmRest;
+    // Thrust forward + raise toward center, index finger leading.
+    this.viewmodel.position.set(
+      rest.pos.x - 0.22 * p,
+      rest.pos.y + 0.34 * p,
+      rest.pos.z - 0.28 * p
+    );
+    this.viewmodel.rotation.set(rest.rot.x - 0.5 * p, rest.rot.y, rest.rot.z);
+  }
+
+  _easeOutBack(x) { const c1 = 1.70158, c3 = c1 + 1; return x <= 0 ? 0 : 1 + c3 * Math.pow(x - 1, 3) + c1 * Math.pow(x - 1, 2); }
 
   _castSlot(i) {
     if (this.match.locked || this._finished) return;
@@ -107,6 +154,7 @@ export class ArenaPhase {
     if (skillId == null) return;
     const skill = getSkillById(skillId);
     if (!this.local.canCast(skillId)) { this.overlay.showToast(`${skill.name}: not ready`, 700); return; }
+    this._triggerPointGesture(); // #3 point on command
     if (this._windup) return; // one wind-up at a time
     if (skill.windup >= 0.8) {
       this._windup = { skillId, time: skill.windup };
@@ -125,7 +173,7 @@ export class ArenaPhase {
     if (skill.damage > 0) {
       const dealt = this.match.dealDamage(this.foe, skill.damage, { isBasic: false });
       this.scene3d.flashHit('b');
-      if (dealt > 0) this.overlay.showToast(`${skill.name} → ${dealt} dmg`, 800);
+      if (dealt > 0) { SFX.impact(Math.min(1, skill.damage / 50)); this.overlay.showToast(`${skill.name} → ${dealt} dmg`, 800); }
     } else {
       this.overlay.showToast(`${skill.name} (utility)`, 800);
     }
@@ -191,7 +239,7 @@ export class ArenaPhase {
         this._botTimer = 1.5;
         if (s.damage > 0) {
           const dealt = this.match.dealDamage(this.local, s.damage, { isBasic: false });
-          if (dealt > 0) this.scene3d.flashHit('a');
+          if (dealt > 0) { this.scene3d.flashHit('a'); SFX.hurt(); }
         }
       } else {
         this._botTimer = 0.5; // re-check soon
@@ -239,6 +287,7 @@ export class ArenaPhase {
     const dt = Math.min(this.clock.getDelta(), 0.05);
     this.match.update(dt);
     this.controller.update(dt);
+    this._updateViewmodel(dt); // #3 pointing-hand animation
 
     // Countdown overlay (3·2·1·GO!)
     if (this.match.locked) {
@@ -285,8 +334,8 @@ export class ArenaPhase {
     // Monster steering + basic-attack events + landed spectator throwables
     const { events, landed } = this.scene3d.update(dt, this.match.locked);
     for (const ev of events) {
-      if (ev.attacker === 'a') { const d = this.match.dealDamage(this.foe, this._basicDamage(this.local), { isBasic: true }); if (d > 0) this.scene3d.flashHit('b'); }
-      else { const d = this.match.dealDamage(this.local, this._basicDamage(this.foe), { isBasic: true }); if (d > 0) this.scene3d.flashHit('a'); }
+      if (ev.attacker === 'a') { const d = this.match.dealDamage(this.foe, this._basicDamage(this.local), { isBasic: true }); if (d > 0) { this.scene3d.flashHit('b'); SFX.impact(0.4); } }
+      else { const d = this.match.dealDamage(this.local, this._basicDamage(this.foe), { isBasic: true }); if (d > 0) { this.scene3d.flashHit('a'); SFX.hurt(); } }
     }
     for (const l of landed) this._resolveThrowLanding(l);
 
