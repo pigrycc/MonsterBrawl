@@ -172,3 +172,17 @@ Legend: ✅ Done · 🟡 Partial · ❌ Missing · 🚫 Needs native CI runner (
 | FPP hand always visible | ✅ FIXED — viewmodel hidden at rest, shows only during the active-skill point gesture (~0.3s) |
 | LMB click-to-move order (overrides stance; clears on arrival; interrupted by cast/stance change) | ✅ (shared move-order in combat model + runner + scene; works single-player and synced) |
 | Shove rebound LMB → RMB (so LMB is the move order) | ✅ + context-menu suppressed |
+
+## Feedback round 4 (networked prep, spectators, voice, LAN tooling)
+| Item | Status |
+|---|---|
+| #1 Networked prep-phase drafting (authoritative) | ✅ server PrepSession + per-client PREP_SNAPSHOT + prepBuy; drafted loadout carries into the bout — verified over the wire |
+| #1 Client net-prep board UI | ✅ NetPrepPhase (6 totem cards, slots, timer, buy) |
+| #2 Manual spectator view | ✅ non-fighters get an elevated orbiting camera + "SPECTATING"; combat input disabled |
+| #3 Proximity voice (WebRTC mesh, positional PannerNode, VAD, [V] mute) | ⚠️ BUILT, UNVERIFIED — no mic/peer/audio device in sandbox; needs real two-machine test |
+| #4 Two-machine tooling | ✅ NET `<ms>` ping HUD + `docs/NETWORK_TESTING.md` run guide (feel itself is user-verified only) |
+
+### Caveats
+- Voice signaling relays through the host; code is defensive (no-ops without getUserMedia/RTCPeerConnection) but its runtime behavior is unverified by me.
+- Spectator-thrown items are not yet authoritative (the §6 crowd auto-throw still drives arena throwables); manual spectator throwing is a follow-up.
+- Combat sync has no client-side prediction — high ping will feel like input lag.

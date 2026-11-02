@@ -33,6 +33,13 @@ export const S2C = {
   // state; non-host clients render these snapshots instead of simulating.
   COMBAT_SNAPSHOT: 'combatSnapshot', // {tick, clock, state, a:{...}, b:{...}, events:[]}
   COMBAT_END: 'combatEnd',           // {result}
+  // Networked prep-phase drafting: the host streams each client's own training
+  // cell (offered totems + gold + purchased slots + ready) and the shared timer.
+  PREP_SNAPSHOT: 'prepSnapshot',     // per-recipient {timeLeft, duration, you:{...}, ready:{...}}
+  PREP_END: 'prepEnd',               // {} → combat begins
+  // #3 Proximity voice (WebRTC): the host relays signaling + speaking state.
+  VOICE_SIGNAL: 'voiceSignal',       // {from, to, signal} relayed SDP/ICE
+  VOICE_SPEAKING: 'voiceSpeaking',   // {playerId, speaking} overhead 🔊 indicator
 };
 
 /** Client → Host: intents the local trainer issues during a synced bout. */
@@ -41,6 +48,18 @@ export const C2S_COMBAT = {
   CAST: 'combatCast',           // {slot}
   SHOVE: 'combatShove',         // {}
   MOVE: 'combatMove',           // {x, z} LMB click-to-move order
+};
+
+/** Client → Host: prep-phase intents (networked drafting). */
+export const C2S_PREP = {
+  BUY: 'prepBuy',               // {totemIndex} purchase a totem into the next slot
+  READY: 'prepReady',           // {} signal done (also implied by 4 slots)
+};
+
+/** Client → Host: proximity-voice signaling (relayed to a target peer). */
+export const C2S_VOICE = {
+  SIGNAL: 'voiceSignal',        // {to, signal} forward WebRTC SDP/ICE to peer `to`
+  SPEAKING: 'voiceSpeaking',    // {speaking} broadcast voice-activity state
 };
 
 /** Lobby/room phases the server advances through. */

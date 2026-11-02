@@ -10,8 +10,10 @@
  */
 import { WebSocketServer } from 'ws';
 import { Room } from './room.js';
-import { C2S, C2S_COMBAT, S2C, PHASE, encode, decode, PROTOCOL_VERSION, DEFAULT_PORT } from '../src/shared/protocol.js';
+import { C2S, C2S_COMBAT, C2S_PREP, C2S_VOICE, S2C, PHASE, encode, decode, PROTOCOL_VERSION, DEFAULT_PORT } from '../src/shared/protocol.js';
 import { CombatRunner } from '../src/shared/combatRunner.js';
+import { PrepSession } from '../src/shared/prepSession.js';
+import { botDraft } from '../src/shared/bot.js';
 import { freeSkills } from '../src/shared/skills.js';
 
 /**
@@ -31,32 +33,93 @@ export function startServer({ port = DEFAULT_PORT, roomName, playerLimit } = {})
   const broadcast = (type, data) => { const msg = encode(type, data); for (const ws of sockets.values()) if (ws.readyState === ws.OPEN) ws.send(msg); };
   const broadcastRoom = () => broadcast(S2C.ROOM_STATE, room.snapshot());
 
-  // --- #2 Authoritative combat loop -----------------------------------------
+  // --- Authoritative prep + combat loops ------------------------------------
   let combat = null; // { runner, interval }
+  let prep = null;   // { session, interval, meta, loadouts }
   const TICK_HZ = 30;
+  const fallbackSkills = () => freeSkills().slice(0, 4).map((s) => s.id);
 
-  function buildFighters() {
+  /** Who's in the bout (first two players; bot fills a 1-player room). */
+  function fighterMeta() {
     const players = room.snapshot().players;
-    const fallback = freeSkills().slice(0, 4).map((s) => s.id);
-    const mk = (p) => ({
-      playerId: p.id,
-      monsterId: p.selectedMonsterId || 'pyroroc',
-      skillIds: fallback, // networked skill drafting is a later refinement
-      isBot: false,
-    });
-    let a, b;
-    if (players.length >= 2) { a = mk(players[0]); b = mk(players[1]); }
-    else if (players.length === 1) {
-      a = mk(players[0]);
-      b = { playerId: 'bot-host', monsterId: 'voltkid', skillIds: fallback, isBot: true };
-    } else return null;
-    return { a, b };
+    const mk = (p) => ({ playerId: p.id, monsterId: p.selectedMonsterId || 'pyroroc', isBot: false });
+    if (players.length >= 2) return [mk(players[0]), mk(players[1])];
+    if (players.length === 1) return [mk(players[0]), { playerId: 'bot-host', monsterId: 'voltkid', isBot: true }];
+    return null;
   }
 
-  function startCombat() {
+  // --- #1 Networked prep-phase drafting -------------------------------------
+  function startPrep() {
+    stopPrep();
+    const meta = fighterMeta();
+    if (!meta) return;
+    room.phase = PHASE.PREP;
+    const session = new PrepSession({
+      fighters: meta.map((m, i) => ({ playerId: m.playerId, monsterId: m.monsterId, seed: (Date.now() + i) & 0xffff })),
+      onComplete: () => finishPrep(),
+    });
+    // Bots auto-draft immediately (GDD §8).
+    for (const m of meta) if (m.isBot) botDraft(session.getCell(m.playerId));
+
+    prep = { session, meta, interval: null };
+    const dt = 1 / TICK_HZ;
+    prep.interval = setInterval(() => {
+      session.update(dt);
+      broadcastPrep();
+    }, 1000 / TICK_HZ);
+    if (prep.interval.unref) prep.interval.unref();
+    broadcast(S2C.PHASE, { phase: PHASE.PREP });
+    broadcastPrep();
+  }
+
+  /** Per-player prep snapshot: a client only sees its OWN totems/gold/slots. */
+  function broadcastPrep() {
+    if (!prep) return;
+    const { session } = prep;
+    const ready = {};
+    for (const [pid, cell] of session.cells) ready[pid] = cell.isReady;
+    for (const [pid, ws] of sockets) {
+      const cell = session.getCell(pid);
+      if (!cell) continue; // spectators / non-fighters
+      send(ws, S2C.PREP_SNAPSHOT, {
+        timeLeft: +session.timeLeft.toFixed(2),
+        duration: session.duration,
+        ready,
+        you: {
+          gold: cell.gold,
+          slots: cell.slots.slice(),
+          totems: cell.totems.map((t) => ({ id: t.skill.id, name: t.skill.name, cost: cell.costOf(t.skill), element: t.skill.element, purchased: t.purchased })),
+        },
+      });
+    }
+  }
+
+  function finishPrep() {
+    if (!prep) return;
+    // Resolve each fighter's loadout (drafted, or free basics if they idled).
+    const loadouts = {};
+    for (const m of prep.meta) {
+      const cell = prep.session.getCell(m.playerId);
+      const drafted = cell ? cell.slots.filter((s) => s != null) : [];
+      loadouts[m.playerId] = drafted.length ? drafted : fallbackSkills();
+    }
+    const meta = prep.meta;
+    stopPrep();
+    broadcast(S2C.PREP_END, {});
+    startCombat(meta, loadouts);
+  }
+
+  function stopPrep() { if (prep) { clearInterval(prep.interval); prep = null; } }
+
+  // --- #2 Authoritative combat loop -----------------------------------------
+  function startCombat(meta, loadouts) {
     stopCombat();
-    const f = buildFighters();
-    if (!f) return;
+    if (!meta) { meta = fighterMeta(); loadouts = null; }
+    if (!meta) return;
+    const f = {
+      a: { ...meta[0], skillIds: loadouts?.[meta[0].playerId] || fallbackSkills() },
+      b: { ...meta[1], skillIds: loadouts?.[meta[1].playerId] || fallbackSkills() },
+    };
     const runner = new CombatRunner({
       a: f.a, b: f.b,
       onEnd: (result) => { broadcast(S2C.COMBAT_END, { result }); stopCombat(); room.phase = PHASE.LOBBY; broadcastRoom(); },
@@ -104,16 +167,29 @@ export function startServer({ port = DEFAULT_PORT, roomName, playerLimit } = {})
         case C2S.START_MATCH: {
           const res = room.startMatch(playerId);
           if (res.error) { send(ws, S2C.ERROR, { reason: res.error }); break; }
-          broadcast(S2C.PHASE, { phase: room.phase });
           broadcastRoom();
-          startCombat(); // #2 host begins the authoritative bout
+          startPrep(); // #1 host begins the authoritative prep phase (drafting)
           break;
         }
+        // #1 Prep-phase intents.
+        case C2S_PREP.BUY: {
+          const cell = prep?.session.getCell(playerId);
+          if (cell) { cell.purchase(data.totemIndex); broadcastPrep(); }
+          break;
+        }
+        case C2S_PREP.READY: break; // readiness is implied by 4 filled slots
         // #2 Combat intents relayed from clients to the authoritative runner.
         case C2S_COMBAT.STANCE: combat?.runner.cmdStance(playerId, data.stance); break;
         case C2S_COMBAT.CAST: combat?.runner.cmdCast(playerId, data.slot); break;
         case C2S_COMBAT.SHOVE: combat?.runner.cmdShove(playerId); break;
         case C2S_COMBAT.MOVE: combat?.runner.cmdMove(playerId, data.x, data.z); break;
+        // #3 Proximity voice signaling relay (host forwards SDP/ICE to the peer).
+        case C2S_VOICE.SIGNAL: {
+          const target = sockets.get(data.to);
+          if (target) send(target, S2C.VOICE_SIGNAL, { from: playerId, to: data.to, signal: data.signal });
+          break;
+        }
+        case C2S_VOICE.SPEAKING: broadcast(S2C.VOICE_SPEAKING, { playerId, speaking: !!data.speaking }); break;
         case C2S.CHAT: broadcast(S2C.CHAT, { from: playerId, text: String(data.text || '').slice(0, 200) }); break;
         case C2S.PING: send(ws, S2C.PONG, { t: data.t }); break;
         default: send(ws, S2C.ERROR, { reason: 'unknown_message' });
@@ -129,8 +205,8 @@ export function startServer({ port = DEFAULT_PORT, roomName, playerLimit } = {})
     });
   });
 
-  const close = () => new Promise((resolve) => { stopCombat(); for (const ws of sockets.values()) ws.terminate(); wss.close(() => resolve()); });
-  return { wss, room, close, getCombat: () => combat };
+  const close = () => new Promise((resolve) => { stopPrep(); stopCombat(); for (const ws of sockets.values()) ws.terminate(); wss.close(() => resolve()); });
+  return { wss, room, close, getCombat: () => combat, getPrep: () => prep };
 }
 
 // CLI entry

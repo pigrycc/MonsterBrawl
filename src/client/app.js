@@ -13,11 +13,13 @@ import { HostConsole } from './ui/hostConsole.js';
 import { LobbyScene } from './lobby/lobbyScene.js';
 import { LocalState } from './state/localState.js';
 import { PrepPhase } from './prep/prepPhase.js';
+import { NetPrepPhase } from './prep/netPrepPhase.js';
 import { ArenaPhase } from './arena/arenaPhase.js';
 import { DebugConsole } from './ui/debugConsole.js';
 import { MainMenu } from './ui/mainMenu.js';
 import { NetClient } from './net/netClient.js';
 import { installUiClickSound } from './audio/sfx.js';
+import { VoiceChat } from './audio/voiceChat.js';
 import { initRapier } from './physics/physicsWorld.js';
 import { DebugConfig } from '../shared/debugConfig.js';
 import { freeSkills } from '../shared/skills.js';
@@ -58,6 +60,12 @@ export class GameApp {
 
     installUiClickSound(); // #7 tactile UI click SFX across all menus/HUD
     initRapier();          // #1 start loading the physics WASM early
+    // #3 Toggle-mute proximity voice on [V].
+    this.input.onPress('KeyV', () => {
+      if (!this.voice?.enabled) return;
+      const muted = this.voice.toggleMute();
+      this.phase?.overlay?.showToast?.(muted ? '🔇 Muted' : '🎙 Unmuted', 900);
+    });
 
     this._loop = this._loop.bind(this);
     requestAnimationFrame(this._loop);
@@ -115,8 +123,12 @@ export class GameApp {
       return;
     }
     this.net = net;
+    // #3 Proximity voice — start best-effort (safe no-op if mic/RTC unavailable).
+    this.voice = new VoiceChat({ net, localPlayerId: () => net.playerId });
+    this.voice.start().then((ok) => { if (ok) console.log('[MCB] proximity voice active ([V] to mute)'); });
     net.on('ping', (ms) => this.menu?.setStatus(`Connected as ${net.isHost ? 'HOST' : 'guest'} · room "${net.room?.config?.roomName}"`, ms));
-    net.on('phase', (p) => { if (p.phase === 'PREP') this._onNetStart(); });
+    net.on('phase', (p) => { if (p.phase === 'PREP') this._onNetPrep(); });
+    net.on('prepEnd', () => this._onNetArena());
     net.on('disconnect', () => { this.net = null; });
     // Reflect the networked session into the local lobby and enter it.
     LocalState.get().isHost = net.isHost;
@@ -124,13 +136,17 @@ export class GameApp {
     this.enterLobby();
   }
 
-  _onNetStart() {
-    // #2 Host started the authoritative bout. Every client enters the SYNCED
-    // arena and renders the host's combat snapshots. (Networked prep-phase
-    // skill drafting is a later refinement; fighters come from the server.)
+  _onNetPrep() {
+    // #1 Host started the authoritative PREP phase — enter the networked draft
+    // board, which renders the server's per-client prep snapshots.
+    this._swap(new NetPrepPhase({ net: this.net, onComplete: () => {} }), 'NET_PREP');
+  }
+
+  _onNetArena() {
+    // #1→#2 Prep ended on the host → enter the SYNCED arena (host-authoritative
+    // combat). Fighters + their drafted loadouts come from the server.
     const room = this.net?.room;
-    if (!room) { this.startMatch(); return; }
-    const players = room.players;
+    const players = room?.players ?? [];
     const fighters = players.slice(0, 2).map((p) => ({
       playerId: p.id, monsterId: p.selectedMonsterId || 'pyroroc',
       skillIds: freeSkills().slice(0, 4).map((s) => s.id), isBot: false,

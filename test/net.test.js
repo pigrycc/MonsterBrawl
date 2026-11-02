@@ -169,8 +169,11 @@ test('host starts combat; all clients receive identical snapshots', async () => 
     host.on('combatSnapshot', (s) => hostSnaps.push(s));
     guest.on('combatSnapshot', (s) => guestSnaps.push(s));
 
+    DebugConfig.set('trainingPhaseDuration', 0.5); // skip through prep quickly
+    const started = new Promise((r) => host.on('prepEnd', () => r(true)));
     host.startMatch();
-    // collect ~0.5s of snapshots (30Hz → ~15)
+    await started;
+    // collect ~0.5s of combat snapshots (30Hz → ~15)
     await new Promise((r) => setTimeout(r, 500));
 
     assert.ok(hostSnaps.length > 3, `host got ${hostSnaps.length} snapshots`);
@@ -191,7 +194,7 @@ test('host starts combat; all clients receive identical snapshots', async () => 
     assert.ok(compared > 2, `compared ${compared} shared ticks`);
 
     host.disconnect(); guest.disconnect();
-  } finally { await srv.close(); }
+  } finally { await srv.close(); DebugConfig.reset(); }
 });
 
 test('a guest combat intent reaches the authoritative runner', async () => {
@@ -203,7 +206,10 @@ test('a guest combat intent reaches the authoritative runner', async () => {
     const guest = await connectClient(port, 'Guest');
     host.selectMonster('pyroroc');
     guest.selectMonster('voltkid');
+    DebugConfig.set('trainingPhaseDuration', 0.5);
+    const started = new Promise((r) => host.on('prepEnd', () => r(true)));
     host.startMatch();
+    await started;
     await new Promise((r) => setTimeout(r, 150));
     // guest commands its monster to NEUTRAL; the server runner should reflect it
     guest.combatStance('NEUTRAL');
@@ -213,5 +219,87 @@ test('a guest combat intent reaches the authoritative runner', async () => {
     const guestC = runner.combatantFor(guest.playerId);
     assert.ok(guestC, 'guest has a combatant');
     host.disconnect(); guest.disconnect();
+  } finally { await srv.close(); DebugConfig.reset(); }
+});
+
+// --- #1 Networked prep-phase drafting over the wire ------------------------
+
+test('start → prep snapshots stream each client its own totems/gold/slots', async () => {
+  DebugConfig.reset();
+  const port = nextPort();
+  const srv = startServer({ port });
+  try {
+    const host = await connectClient(port, 'Host');
+    const guest = await connectClient(port, 'Guest');
+    host.selectMonster('pyroroc');
+    guest.selectMonster('voltkid');
+
+    const hostPrep = new Promise((res) => host.on('prepSnapshot', (s) => { if (s.you?.totems?.length === 6) res(s); }));
+    const guestPrep = new Promise((res) => guest.on('prepSnapshot', (s) => { if (s.you?.totems?.length === 6) res(s); }));
+    host.startMatch();
+
+    const hs = await hostPrep;
+    const gs = await guestPrep;
+    assert.equal(hs.you.totems.length, 6, 'host gets 6 totems');
+    assert.equal(gs.you.totems.length, 6, 'guest gets 6 totems');
+    assert.equal(hs.you.gold, 50);
+    assert.ok(hs.you.slots.every((s) => s === null), 'slots start empty');
+    assert.ok(hs.timeLeft > 0 && hs.timeLeft <= hs.duration);
+
+    host.disconnect(); guest.disconnect();
   } finally { await srv.close(); }
+});
+
+test('prep buy intent fills a slot and deducts gold authoritatively', async () => {
+  DebugConfig.reset();
+  const port = nextPort();
+  const srv = startServer({ port });
+  try {
+    const host = await connectClient(port, 'Host');
+    const guest = await connectClient(port, 'Guest');
+    host.selectMonster('terrataur');
+    guest.selectMonster('galebird');
+
+    // wait for first prep snapshot to learn totem costs
+    const firstSnap = await new Promise((res) => { host.on('prepSnapshot', (s) => { if (s.you?.totems?.length === 6) res(s); }); host.startMatch(); });
+    // pick the cheapest totem to buy
+    const idx = firstSnap.you.totems.map((t, i) => ({ i, c: t.cost })).sort((a, b) => a.c - b.c)[0].i;
+
+    const afterBuy = new Promise((res) => host.on('prepSnapshot', (s) => { if (s.you.slots.some((x) => x !== null)) res(s); }));
+    host.prepBuy(idx);
+    const s = await afterBuy;
+    assert.ok(s.you.slots.some((x) => x !== null), 'a slot got filled');
+
+    // confirm on the authoritative server cell too
+    const cell = srv.getPrep().session.getCell(host.playerId);
+    assert.equal(cell.slots.filter((x) => x != null).length, 1);
+
+    host.disconnect(); guest.disconnect();
+  } finally { await srv.close(); }
+});
+
+test('prep → combat: drafted loadout carries into the authoritative bout', async () => {
+  DebugConfig.reset();
+  DebugConfig.set('trainingPhaseDuration', 1); // short prep so it auto-finishes fast
+  const port = nextPort();
+  const srv = startServer({ port });
+  try {
+    const host = await connectClient(port, 'Host');
+    host.selectMonster('pyroroc');
+
+    const prepEnded = new Promise((res) => host.on('prepEnd', () => res(true)));
+    const combatStarted = new Promise((res) => host.on('combatSnapshot', (s) => res(s)));
+    host.startMatch();
+
+    assert.equal(await prepEnded, true, 'prep ends (timer)');
+    const snap = await combatStarted;
+    assert.ok(snap.a && snap.b, 'combat snapshots flowing after prep');
+
+    // runner combatant should have a 4-skill loadout (drafted or fallback)
+    const runner = srv.getCombat().runner;
+    const hostC = runner.combatantFor(host.playerId);
+    assert.equal(hostC.skillIds.filter((x) => x != null).length, 4);
+
+    host.disconnect();
+  } finally { await srv.close(); DebugConfig.reset(); }
 });

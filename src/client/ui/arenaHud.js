@@ -81,6 +81,11 @@ export class ArenaHud {
     this.stanceKeys = document.createElement('div');
     this.stanceKeys.className = 'mcb-ar-stancekeys';
     this.stanceKeys.innerHTML = `Stance: <b>[Q]</b> Offensive · <b>[E]</b> Defensive · <b>[F]</b> Rest · <b>[1–4]</b> Skills · <b>LMB</b> Move · <b>RMB</b> Shove`;
+
+    // #4 Net status line (ping) — only shown in networked play.
+    this.netStatus = document.createElement('div');
+    this.netStatus.style.cssText = 'position:fixed;top:12px;right:14px;z-index:26;font:12px ui-monospace,monospace;color:#7fd38b;background:rgba(14,18,28,.7);border:1px solid #2b3448;border-radius:6px;padding:4px 10px;display:none;';
+    document.body.appendChild(this.netStatus);
     this.count = document.createElement('div');
     this.count.className = 'mcb-count';
     this.end = document.createElement('div');
@@ -134,5 +139,14 @@ export class ArenaHud {
     this.end.style.display = 'flex';
   }
 
-  dispose() { [this.bars, this.clock, this.skillsEl, this.stanceKeys, this.count, this.end].forEach((e) => e.remove()); }
+  /** #4 Show/update the net status (ping ms). Call with null to hide. */
+  setNetStatus(pingMs) {
+    if (pingMs == null) { this.netStatus.style.display = 'none'; return; }
+    const color = pingMs < 60 ? '#7fd38b' : pingMs < 150 ? '#ffd966' : '#ff6b6b';
+    this.netStatus.style.display = 'block';
+    this.netStatus.style.color = color;
+    this.netStatus.textContent = `NET ${pingMs}ms`;
+  }
+
+  dispose() { [this.bars, this.clock, this.skillsEl, this.stanceKeys, this.count, this.end, this.netStatus].forEach((e) => e.remove()); }
 }

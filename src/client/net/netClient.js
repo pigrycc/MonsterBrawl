@@ -6,7 +6,7 @@
  * Works in the browser (global WebSocket) and in Node (pass a WebSocket impl),
  * so it's testable headlessly against the real server.
  */
-import { C2S, C2S_COMBAT, S2C, encode, decode, PROTOCOL_VERSION } from '../../shared/protocol.js';
+import { C2S, C2S_COMBAT, C2S_PREP, C2S_VOICE, S2C, encode, decode, PROTOCOL_VERSION } from '../../shared/protocol.js';
 
 export class NetClient {
   /**
@@ -79,6 +79,10 @@ export class NetClient {
       case S2C.PONG: this.ping = Math.round(performance.now() - data.t); this._emit('ping', this.ping); break;
       case S2C.COMBAT_SNAPSHOT: this._emit('combatSnapshot', data); break;
       case S2C.COMBAT_END: this._emit('combatEnd', data); break;
+      case S2C.PREP_SNAPSHOT: this._emit('prepSnapshot', data); break;
+      case S2C.PREP_END: this._emit('prepEnd', data); break;
+      case S2C.VOICE_SIGNAL: this._emit('voiceSignal', data); break;
+      case S2C.VOICE_SPEAKING: this._emit('voiceSpeaking', data); break;
       case S2C.ERROR: this._emit('error', data); break;
     }
   }
@@ -96,6 +100,12 @@ export class NetClient {
   combatCast(slot) { this._send(C2S_COMBAT.CAST, { slot }); }
   combatShove() { this._send(C2S_COMBAT.SHOVE, {}); }
   combatMove(x, z) { this._send(C2S_COMBAT.MOVE, { x, z }); }
+  // #1 prep intents
+  prepBuy(totemIndex) { this._send(C2S_PREP.BUY, { totemIndex }); }
+  prepReady() { this._send(C2S_PREP.READY, {}); }
+  // #3 voice signaling
+  voiceSignal(to, signal) { this._send(C2S_VOICE.SIGNAL, { to, signal }); }
+  voiceSpeaking(speaking) { this._send(C2S_VOICE.SPEAKING, { speaking }); }
 
   _startPing() {
     this._stopPing();

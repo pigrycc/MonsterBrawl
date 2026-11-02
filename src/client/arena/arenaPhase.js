@@ -48,8 +48,13 @@ export class ArenaPhase {
     this.synced = !!net;
 
     const [f0, f1] = fighters;
-    const localF = f0.playerId === localPlayerId ? f0 : f1;
-    const foeF = f0.playerId === localPlayerId ? f1 : f0;
+    // #2 Spectator mode: the local player is NOT one of the two fighters →
+    // they watch from the stands (free orbit camera, no monster control).
+    this.spectator = f0.playerId !== localPlayerId && f1.playerId !== localPlayerId;
+    // In spectator mode there is no local-controlled monster; just show the
+    // two fighters (f0 = "a"/left, f1 = "b"/right).
+    const localF = this.spectator ? f0 : (f0.playerId === localPlayerId ? f0 : f1);
+    const foeF = this.spectator ? f1 : (f0.playerId === localPlayerId ? f1 : f0);
 
     this.local = new MonsterCombatant({ playerId: localF.playerId, monsterId: localF.monsterId, skillIds: localF.skillIds });
     this.foe = new MonsterCombatant({ playerId: foeF.playerId, monsterId: foeF.monsterId, skillIds: foeF.skillIds });
@@ -57,11 +62,17 @@ export class ArenaPhase {
     this.match = new CombatMatch({ a: this.local, b: this.foe, countdown: 3, onEnd: (r) => this._onEnd(r) });
     this.scene3d = new ArenaScene({ a: this.local, b: this.foe });
 
-    this.camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 160);
-    this.controller = new FppController(this.camera, input, renderer.domElement, {
-      x: -10, z: 12, eyeHeight: 1.7, boundaryRadius: this.scene3d.arenaRadius - 1, speed: 6.0,
-    });
-    this._buildViewmodel(); // #3 first-person pointing hand
+    this.camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 200);
+    if (this.spectator) {
+      // #2 Spectator: an elevated camera that slowly orbits the arena from the
+      // stands. No FPP controller, no viewmodel, no combat input.
+      this._specAngle = 0;
+    } else {
+      this.controller = new FppController(this.camera, input, renderer.domElement, {
+        x: -10, z: 12, eyeHeight: 1.7, boundaryRadius: this.scene3d.arenaRadius - 1, speed: 6.0,
+      });
+      this._buildViewmodel(); // #3 first-person pointing hand
+    }
 
     this.hud = new ArenaHud({
       left: { name: this.local.def.name },
@@ -106,6 +117,7 @@ export class ArenaPhase {
   }
 
   _bindInput() {
+    if (this.spectator) { this._subs = []; return; } // #2 spectators don't control a monster
     const stance = (s) => {
       if (this.match.locked) return;
       if (this.synced) { this.net.combatStance(s); this.overlay.showToast(`Stance → ${s}`, 800); return; }
@@ -356,10 +368,23 @@ export class ArenaPhase {
     }
   }
 
+  /** #2 Elevated orbiting spectator camera over the arena. */
+  _updateSpectatorCamera(dt) {
+    this._specAngle += dt * 0.15;
+    const R = this.scene3d.arenaRadius + 6, H = 14;
+    this.camera.position.set(Math.cos(this._specAngle) * R, H, Math.sin(this._specAngle) * R);
+    this.camera.lookAt(0, 1, 0);
+  }
+
   /** #2 Per-frame render for a networked (host-authoritative) bout. */
   _updateSynced(dt) {
-    this.controller.update(dt);
-    this._updateViewmodel(dt);
+    if (this.spectator) {
+      this._updateSpectatorCamera(dt);
+      if (!this._specBannerShown) { this.overlay.showToast('👁 SPECTATING', 2500); this._specBannerShown = true; }
+    } else {
+      this.controller.update(dt);
+      this._updateViewmodel(dt);
+    }
 
     // Countdown overlay from the authoritative snapshot.
     if (this.match.state === MATCH_STATE.COUNTDOWN) {
@@ -369,11 +394,13 @@ export class ArenaPhase {
       setTimeout(() => this.hud.showCountdown(''), 600);
     }
 
-    // LMB move-order + RMB shove (relayed to host in synced mode).
-    if (this.match.state === MATCH_STATE.ACTIVE) this._handleMouseCommands(dt);
+    // LMB move-order + RMB shove (relayed to host in synced mode). Spectators
+    // don't control a monster, so skip.
+    if (!this.spectator && this.match.state === MATCH_STATE.ACTIVE) this._handleMouseCommands(dt);
 
     // Render the scene from the latest snapshot (positions already applied).
     this.scene3d.update(dt, this.match.state === MATCH_STATE.COUNTDOWN);
+    this.hud.setNetStatus(this.net?.ping ?? null); // #4 latency readout
     this.hud.setBars(this.local, this.foe);
     this.hud.setClock(this.match.clock, this.match.state === MATCH_STATE.SUDDEN_DEATH);
     this.hud.renderSkills(this.local.cooldowns);
@@ -489,15 +516,20 @@ export class ArenaPhase {
   _onEnd(result) {
     if (this._finished) return;
     this._finished = true;
-    const won = result.winnerPlayerId === this.localPlayerId;
-    this.hud.showEnd(won ? 'VICTORY' : 'DEFEAT', won ? `+${result.winReward} Gold` : `+${result.loseReward} Gold`);
+    if (this.spectator) {
+      const winnerName = result.winnerPlayerId === this.local.playerId ? this.local.def.name : this.foe.def.name;
+      this.hud.showEnd(`${winnerName} WINS`, 'You were spectating');
+    } else {
+      const won = result.winnerPlayerId === this.localPlayerId;
+      this.hud.showEnd(won ? 'VICTORY' : 'DEFEAT', won ? `+${result.winReward} Gold` : `+${result.loseReward} Gold`);
+    }
     setTimeout(() => this.onComplete?.(result), 3000);
   }
 
   dispose() {
     window.removeEventListener('resize', this._onResize);
     this._subs?.forEach((off) => off());
-    this.controller.dispose();
+    this.controller?.dispose();
     this.hud.dispose();
     this.overlay.dispose();
     this.scene3d.dispose?.(); // #1 free the Rapier world
