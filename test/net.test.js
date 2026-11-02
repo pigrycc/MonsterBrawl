@@ -151,3 +151,67 @@ test('ping round-trip returns a number', async () => {
     c.disconnect();
   } finally { await srv.close(); }
 });
+
+// --- #2 Per-client synchronized combat over the wire -----------------------
+
+test('host starts combat; all clients receive identical snapshots', async () => {
+  DebugConfig.reset();
+  const port = nextPort();
+  const srv = startServer({ port });
+  try {
+    const host = await connectClient(port, 'Host');
+    const guest = await connectClient(port, 'Guest');
+    host.selectMonster('pyroroc');
+    guest.selectMonster('voltkid');
+
+    const hostSnaps = [];
+    const guestSnaps = [];
+    host.on('combatSnapshot', (s) => hostSnaps.push(s));
+    guest.on('combatSnapshot', (s) => guestSnaps.push(s));
+
+    host.startMatch();
+    // collect ~0.5s of snapshots (30Hz → ~15)
+    await new Promise((r) => setTimeout(r, 500));
+
+    assert.ok(hostSnaps.length > 3, `host got ${hostSnaps.length} snapshots`);
+    assert.ok(guestSnaps.length > 3, `guest got ${guestSnaps.length} snapshots`);
+
+    // Both clients must see the same authoritative state for a shared tick.
+    const byTickH = new Map(hostSnaps.map((s) => [s.tick, s]));
+    let compared = 0;
+    for (const g of guestSnaps) {
+      const h = byTickH.get(g.tick);
+      if (!h) continue;
+      assert.equal(h.a.hp, g.a.hp, `tick ${g.tick} a.hp`);
+      assert.equal(h.b.hp, g.b.hp, `tick ${g.tick} b.hp`);
+      assert.equal(h.a.x, g.a.x, `tick ${g.tick} a.x`);
+      assert.equal(h.state, g.state);
+      compared++;
+    }
+    assert.ok(compared > 2, `compared ${compared} shared ticks`);
+
+    host.disconnect(); guest.disconnect();
+  } finally { await srv.close(); }
+});
+
+test('a guest combat intent reaches the authoritative runner', async () => {
+  DebugConfig.reset();
+  const port = nextPort();
+  const srv = startServer({ port });
+  try {
+    const host = await connectClient(port, 'Host');
+    const guest = await connectClient(port, 'Guest');
+    host.selectMonster('pyroroc');
+    guest.selectMonster('voltkid');
+    host.startMatch();
+    await new Promise((r) => setTimeout(r, 150));
+    // guest commands its monster to NEUTRAL; the server runner should reflect it
+    guest.combatStance('NEUTRAL');
+    await new Promise((r) => setTimeout(r, 120));
+    const runner = srv.getCombat()?.runner;
+    assert.ok(runner, 'combat running');
+    const guestC = runner.combatantFor(guest.playerId);
+    assert.ok(guestC, 'guest has a combatant');
+    host.disconnect(); guest.disconnect();
+  } finally { await srv.close(); }
+});

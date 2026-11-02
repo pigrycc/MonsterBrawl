@@ -36,11 +36,16 @@ export class ArenaPhase {
    * @param {Array<{playerId:string, monsterId:string, skillIds:number[], isBot?:boolean}>} ctx.fighters (exactly 2)
    * @param {(result:object)=>void} ctx.onComplete
    */
-  constructor({ renderer, input, localPlayerId, fighters, onComplete }) {
+  constructor({ renderer, input, localPlayerId, fighters, onComplete, net = null }) {
     this.renderer = renderer;
     this.input = input;
     this.localPlayerId = localPlayerId;
     this.onComplete = onComplete;
+    // #2 Networked synced mode: when a NetClient is present, the host server is
+    // authoritative — we render its snapshots and relay intents, rather than
+    // running the local sim.
+    this.net = net;
+    this.synced = !!net;
 
     const [f0, f1] = fighters;
     const localF = f0.playerId === localPlayerId ? f0 : f1;
@@ -76,13 +81,30 @@ export class ArenaPhase {
 
     this._bindInput();
 
+    // #2 In synced mode, render authoritative snapshots + end from the host.
+    if (this.synced) {
+      this._netOff = [
+        this.net.on('combatSnapshot', (s) => this._applyNetSnapshot(s)),
+        this.net.on('combatEnd', (d) => this._onEnd(d.result)),
+      ];
+    }
+
     this._onResize = () => { this.camera.aspect = window.innerWidth / window.innerHeight; this.camera.updateProjectionMatrix(); };
     window.addEventListener('resize', this._onResize);
+  }
+
+  _applyNetSnapshot(snap) {
+    this._netSnap = snap;
+    this.scene3d.applySnapshot(snap);
+    this.match.clock = snap.clock;
+    this.match.state = snap.state;
+    this.match.countdown = snap.countdown;
   }
 
   _bindInput() {
     const stance = (s) => {
       if (this.match.locked) return;
+      if (this.synced) { this.net.combatStance(s); this.overlay.showToast(`Stance → ${s}`, 800); return; }
       if (this.local.commandStance(s)) this.overlay.showToast(`Stance → ${s}`, 800);
       else if (this.local.stanceCooldownRemaining > 0) this.overlay.showToast(`Stance on cooldown (${this.local.stanceCooldownRemaining.toFixed(1)}s)`, 700);
     };
@@ -151,11 +173,12 @@ export class ArenaPhase {
 
   _castSlot(i) {
     if (this.match.locked || this._finished) return;
+    this._triggerPointGesture(); // #3 point on command (always, local or synced)
+    if (this.synced) { this.net.combatCast(i); return; } // host resolves authoritatively
     const skillId = this.local.skillIds[i];
     if (skillId == null) return;
     const skill = getSkillById(skillId);
     if (!this.local.canCast(skillId)) { this.overlay.showToast(`${skill.name}: not ready`, 700); return; }
-    this._triggerPointGesture(); // #3 point on command
     if (this._windup) return; // one wind-up at a time
     if (skill.windup >= 0.8) {
       this._windup = { skillId, time: skill.windup };
@@ -295,8 +318,40 @@ export class ArenaPhase {
     }
   }
 
+  /** #2 Per-frame render for a networked (host-authoritative) bout. */
+  _updateSynced(dt) {
+    this.controller.update(dt);
+    this._updateViewmodel(dt);
+
+    // Countdown overlay from the authoritative snapshot.
+    if (this.match.state === MATCH_STATE.COUNTDOWN) {
+      this.hud.showCountdown(String(Math.max(1, Math.ceil(this.match.countdown))));
+    } else if (this._prevCount !== 'go') {
+      this.hud.showCountdown('GO!'); this._prevCount = 'go';
+      setTimeout(() => this.hud.showCountdown(''), 600);
+    }
+
+    // LMB shove is relayed to the host (cosmetic cooldown locally).
+    if (this.match.state === MATCH_STATE.ACTIVE && this.input.mouse.left && this._shoveCooldown <= 0) {
+      this.net.combatShove(); SFX.impact(0.4);
+      this._shoveCooldown = DebugConfig.get('shoveCooldownSeconds');
+    }
+    this._shoveCooldown = Math.max(0, this._shoveCooldown - dt);
+
+    // Render the scene from the latest snapshot (positions already applied).
+    this.scene3d.update(dt, this.match.state === MATCH_STATE.COUNTDOWN);
+    this.hud.setBars(this.local, this.foe);
+    this.hud.setClock(this.match.clock, this.match.state === MATCH_STATE.SUDDEN_DEATH);
+    this.hud.renderSkills(this.local.cooldowns);
+    this.renderer.render(this.scene3d.scene, this.camera);
+  }
+
   update() {
     const dt = Math.min(this.clock.getDelta(), 0.05);
+    // #2 In synced mode the host owns the sim; locally we only drive the FPP
+    // camera, viewmodel, scene animation (from snapshots), HUD, and LMB shove
+    // (relayed). Skip all local simulation.
+    if (this.synced) { this._updateSynced(dt); return; }
     this.match.update(dt);
     this.controller.update(dt);
     this._updateViewmodel(dt); // #3 pointing-hand animation
@@ -413,5 +468,6 @@ export class ArenaPhase {
     this.hud.dispose();
     this.overlay.dispose();
     this.scene3d.dispose?.(); // #1 free the Rapier world
+    this._netOff?.forEach((off) => off()); // #2 unsubscribe snapshot listeners
   }
 }

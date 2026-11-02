@@ -229,6 +229,34 @@ export class ArenaScene {
     }
   }
 
+  /**
+   * #2 Networked (synced) mode: apply an authoritative snapshot from the host.
+   * Positions/HP/stamina/stance come from the server; the local sim is NOT run.
+   * Physics/ragdoll stay cosmetic — we lerp bodies toward the authoritative pos.
+   */
+  applySnapshot(snap) {
+    this._synced = true;
+    const map = (sideView, s) => {
+      sideView.pos.set(s.x, 0, s.z);
+      // mirror authoritative combat state onto the local combatant for the HUD
+      const c = sideView.combatant;
+      c.hp = s.hp; c.stamina = s.stamina; c.stance = s.stance;
+      c.stunTimer = s.stunned ? Math.max(c.stunTimer, 0.1) : 0;
+      c.confuseTimer = s.confused ? Math.max(c.confuseTimer, 0.1) : 0;
+    };
+    map(this.aView, snap.a);
+    map(this.bView, snap.b);
+    if (this.physics) {
+      this.physics.setPosition('a', snap.a.x, 1.0, snap.a.z);
+      this.physics.setPosition('b', snap.b.x, 1.0, snap.b.z);
+    }
+    // surface miss reactions the host decided
+    for (const ev of snap.events || []) {
+      if (ev.type === 'miss') this.playReaction(ev.caster, ev.reaction);
+      if (ev.type === 'hit') this.flashHit(ev.target);
+    }
+  }
+
   dispose() { this.physics?.dispose?.(); }
 
   /** Flash a monster red when it takes damage. */

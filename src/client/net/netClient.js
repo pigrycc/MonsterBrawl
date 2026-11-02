@@ -6,7 +6,7 @@
  * Works in the browser (global WebSocket) and in Node (pass a WebSocket impl),
  * so it's testable headlessly against the real server.
  */
-import { C2S, S2C, encode, decode, PROTOCOL_VERSION } from '../../shared/protocol.js';
+import { C2S, C2S_COMBAT, S2C, encode, decode, PROTOCOL_VERSION } from '../../shared/protocol.js';
 
 export class NetClient {
   /**
@@ -77,6 +77,8 @@ export class NetClient {
       case S2C.PHASE: this._emit('phase', data); break;
       case S2C.CHAT: this._emit('chat', data); break;
       case S2C.PONG: this.ping = Math.round(performance.now() - data.t); this._emit('ping', this.ping); break;
+      case S2C.COMBAT_SNAPSHOT: this._emit('combatSnapshot', data); break;
+      case S2C.COMBAT_END: this._emit('combatEnd', data); break;
       case S2C.ERROR: this._emit('error', data); break;
     }
   }
@@ -89,6 +91,10 @@ export class NetClient {
   setConfig(patch) { this._send(C2S.HOST_CONFIG, patch); }
   startMatch() { this._send(C2S.START_MATCH, {}); }
   chat(text) { this._send(C2S.CHAT, { text }); }
+  // #2 combat intents
+  combatStance(stance) { this._send(C2S_COMBAT.STANCE, { stance }); }
+  combatCast(slot) { this._send(C2S_COMBAT.CAST, { slot }); }
+  combatShove() { this._send(C2S_COMBAT.SHOVE, {}); }
 
   _startPing() {
     this._stopPing();

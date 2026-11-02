@@ -1,0 +1,87 @@
+/**
+ * Per-client synchronized combat tests (feedback #2). The host runs ONE
+ * CombatRunner and emits snapshots; a client that only applies snapshots must
+ * see the identical authoritative state. These verify the runner is the single
+ * source of truth and that snapshots fully describe the bout.
+ */
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+
+import { DebugConfig } from '../src/shared/debugConfig.js';
+import { CombatRunner } from '../src/shared/combatRunner.js';
+import { MATCH_STATE } from '../src/shared/combat.js';
+
+const fresh = () => DebugConfig.reset();
+const A = { playerId: 'host', monsterId: 'pyroroc', skillIds: [1, 5, 11], isBot: false };
+const B = { playerId: 'bot', monsterId: 'voltkid', skillIds: [1, 5], isBot: true };
+
+test('runner locks during countdown then goes active', () => {
+  fresh();
+  const r = new CombatRunner({ a: A, b: B });
+  assert.equal(r.snapshot().state, MATCH_STATE.COUNTDOWN);
+  for (let i = 0; i < 100; i++) r.update(1 / 30); // ~3.3s > 3s countdown
+  assert.equal(r.match.locked, false);
+  assert.equal(r.snapshot().state, MATCH_STATE.ACTIVE);
+});
+
+test('snapshot fully describes both combatants', () => {
+  fresh();
+  const r = new CombatRunner({ a: A, b: B });
+  r.update(0.1);
+  const s = r.snapshot();
+  for (const side of ['a', 'b']) {
+    for (const k of ['hp', 'maxHp', 'stamina', 'stance', 'monsterId', 'playerId', 'x', 'z']) {
+      assert.ok(k in s[side], `${side}.${k} present`);
+    }
+  }
+  assert.equal(s.a.playerId, 'host');
+  assert.equal(s.b.playerId, 'bot');
+});
+
+test('a client applying only snapshots matches the host exactly', () => {
+  fresh();
+  const host = new CombatRunner({ a: A, b: B });
+  // "Client" is just the latest applied snapshot object.
+  let client = null;
+  const snaps = [];
+  for (let i = 0; i < 120; i++) {               // ~4s: through countdown into combat
+    host.update(1 / 30);
+    const snap = host.snapshot();
+    client = JSON.parse(JSON.stringify(snap));  // serialize → wire → deserialize
+    snaps.push(snap);
+  }
+  // Client state is literally the host snapshot → identical by construction.
+  const hs = host.snapshot();
+  assert.equal(client.tick, hs.tick);
+  assert.equal(client.a.hp, hs.a.hp);
+  assert.equal(client.b.hp, hs.b.hp);
+  assert.equal(client.a.x, hs.a.x);
+  // The bot side should have acted (cast/steer) — some damage or movement.
+  const moved = snaps.some((s) => s.a.x !== -8 || s.b.x !== 8);
+  assert.ok(moved, 'monsters should move under host steering');
+});
+
+test('player intents mutate authoritative state', () => {
+  fresh();
+  const r = new CombatRunner({ a: A, b: B });
+  for (let i = 0; i < 100; i++) r.update(1 / 30); // get to ACTIVE
+  r.cmdStance('host', 'OFFENSIVE');
+  assert.equal(r.a.stance, 'OFFENSIVE');
+  // force the two close, then cast a melee skill and expect a hit event
+  r.pos.a = { x: 0, z: 0 }; r.pos.b = { x: 1, z: 0 };
+  r.a.cooldowns.clear(); r.a.stamina = 100;
+  r.cmdCast('host', 0); // Tackle (id 1), in range
+  const ev = r.snapshot().events;
+  assert.ok(ev.some((e) => e.type === 'hit'), 'in-range cast → hit event');
+});
+
+test('runner ends and reports a result', () => {
+  fresh();
+  let result = null;
+  const r = new CombatRunner({ a: A, b: B, onEnd: (res) => { result = res; } });
+  for (let i = 0; i < 100; i++) r.update(1 / 30);
+  r.match.dealDamage(r.b, 9999); // KO the bot
+  assert.equal(r.ended, true);
+  assert.ok(result);
+  assert.equal(result.winnerPlayerId, 'host');
+});

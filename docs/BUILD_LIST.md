@@ -143,3 +143,22 @@ Legend: ✅ Done · 🟡 Partial · ❌ Missing · 🚫 Needs native CI runner (
 | 6 | Out-of-bounds fail-safe (per-frame clamp to arena) | ✅ (no physics engine; clamp substitutes for CCD) |
 | 7 | Audio SFX — UI clicks + combat impacts (synthesized WebAudio) | ✅ code / ⚠️ UNVERIFIED (no audio device in sandbox) |
 | 8 | Debug multipliers: Skill Cooldown × and Monster HP × (1x–6x) | ✅ (wired + unit-tested) |
+
+---
+
+## Feedback round 2 (physics / sync / slapstick)
+| Item | Status |
+|---|---|
+| Slapstick miss reactions (TRIP/PANCAKE/SPIN/PINBALL/RECOIL/DIZZY/FACEPLANT) | ✅ data-driven from the §10 sheet, range-based hit/miss, animated |
+| True rigid-body physics (Rapier) + solid walls | ✅ 400-impulse contained; replaces clamp |
+| Tumble ragdoll on stun | ✅ free-rotation body tumble (not articulated) |
+| Real impulse knockback (shove/recoil/pinball) | ✅ |
+| Per-client synchronized combat | ✅ host-authoritative CombatRunner + 30Hz snapshot stream; identical snapshots on all clients verified over the wire |
+| Synced arena render (clients render snapshots, relay intents) | ✅ (client render path; full browser↔server loop needs real hardware to feel latency) |
+| Updated §5B status: stance is now instant + post-cooldown (feedback #2 r1) | ✅ |
+
+### Scope notes (honest)
+- Physics is **rigid-body + free-tumble ragdoll**, not jointed/articulated skeletons.
+- Combat sync is **host-authoritative state replication** (not input-lockstep) — robust against physics non-determinism; physics/ragdoll are a per-client cosmetic layer driven by authoritative positions.
+- Networked **prep-phase skill drafting** is not yet synced; networked bouts currently start fighters with free basics. Deferred.
+- The browser↔server synced render couldn't be exercised in the headless sandbox (Playwright is network-isolated from localhost); verified instead via Node client↔server integration tests + single-player headless render.

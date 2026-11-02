@@ -125,14 +125,18 @@ export class GameApp {
   }
 
   _onNetStart() {
-    // Host pressed start on the server; everyone transitions. Build fighters
-    // from the authoritative roster (bots fill per host config).
+    // #2 Host started the authoritative bout. Every client enters the SYNCED
+    // arena and renders the host's combat snapshots. (Networked prep-phase
+    // skill drafting is a later refinement; fighters come from the server.)
     const room = this.net?.room;
     if (!room) { this.startMatch(); return; }
-    // Prototype: still run the local prep→arena for the local player vs a bot;
-    // full per-client synchronized combat is a follow-up. The authoritative
-    // roster/config are already synced and drive who is present.
-    this.startMatch();
+    const players = room.players;
+    const fighters = players.slice(0, 2).map((p) => ({
+      playerId: p.id, monsterId: p.selectedMonsterId || 'pyroroc',
+      skillIds: freeSkills().slice(0, 4).map((s) => s.id), isBot: false,
+    }));
+    if (fighters.length === 1) fighters.push({ playerId: 'bot-host', monsterId: 'voltkid', skillIds: freeSkills().slice(0, 4).map((s) => s.id), isBot: true });
+    this.enterArena(fighters, this.net);
   }
 
   _swap(next, name) {
@@ -207,12 +211,14 @@ export class GameApp {
   }
 
   // --- ARENA ----------------------------------------------------------------
-  enterArena(fighters) {
+  enterArena(fighters, net = null) {
+    const localId = net ? net.playerId : LocalState.get().localPlayerId;
     const arena = new ArenaPhase({
       renderer: this.renderer,
       input: this.input,
-      localPlayerId: LocalState.get().localPlayerId,
+      localPlayerId: localId,
       fighters,
+      net,
       onComplete: (result) => this.onArenaComplete(result),
     });
     this._swap(arena, 'ARENA');

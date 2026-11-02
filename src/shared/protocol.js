@@ -29,6 +29,17 @@ export const S2C = {
   ERROR: 'error',               // {reason}
   PONG: 'pong',                 // {t}
   CHAT: 'chat',                 // {from, text}
+  // #2 Per-client synchronized combat: the host streams authoritative bout
+  // state; non-host clients render these snapshots instead of simulating.
+  COMBAT_SNAPSHOT: 'combatSnapshot', // {tick, clock, state, a:{...}, b:{...}, events:[]}
+  COMBAT_END: 'combatEnd',           // {result}
+};
+
+/** Client → Host: intents the local trainer issues during a synced bout. */
+export const C2S_COMBAT = {
+  STANCE: 'combatStance',       // {stance}
+  CAST: 'combatCast',           // {slot}
+  SHOVE: 'combatShove',         // {}
 };
 
 /** Lobby/room phases the server advances through. */
